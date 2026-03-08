@@ -50,7 +50,7 @@ UObjectDisplayNames,MC导播台_C:◆批量破坏,◆批量破坏,◆批量破�
 UObjectDisplayNames,MC导播台_C:◆遥控灯光,◆遥控灯光,◆遥控灯光,◆Remote Light,◆遙控燈光
 UObjectDisplayNames,MC导播台_C:刷新随机种子,刷新随机种子,刷新随机种子,Refresh Random Seed,刷新隨機種子
 UObjectDisplayNames,MC导播台_C:刷新状态,刷新状态,刷新状态,Refresh State,刷新狀態
-UObjectDisplayNames,MC导播台_C:◆批量NPC事件,◆批量NPC事件,◆批量NPC事件,◆Batch NPC Event,◆批量NPC事件
+UObjectDisplayNames,MC导播台_C:◆批量NPC事件,◆批量 NPC事件,◆批量NPC事件,◆Batch NPC Event,◆批量NPC事件
 UObjectDisplayNames,MC导播台_C:◆批量播片,◆批量播片,◆批量播片,◆Batch Play Sequence,◆批量播片
 UObjectDisplayNames,MC导播台_C:自定义控制台变量,自定义控制台变量,自定义控制台变量,Custom Console Variables,自訂控制台變數
 UObjectDisplayNames,MC导播台_C:随机挑选权重,随机挑选权重,随机挑选权重,Random Selection Weight,隨機挑選權重
@@ -370,13 +370,13 @@ UObjectDisplayNames,观众人群散布器_C:打乱,打乱,打乱,Shuffle,打亂
 UObjectDisplayNames,距离场碰撞箱包裹器_C:分辨率,分辨率,分辨率,Resolution,解析度
 UObjectDisplayNames,距离场碰撞箱包裹器_C:相对偏移,相对偏移,相对偏移,Relative Offset,相對偏移
 UObjectDisplayNames,距离场碰撞箱包裹器_C:显示碰撞箱,显示碰撞箱,显示碰撞箱,Show Collision Box,顯示碰撞箱
-UObjectDisplayNames,远景地形生成器_C:方块,方块,方块,Block,方塊
-UObjectDisplayNames,远景地形生成器_C:方块大小,方块大小,方块大小,Block Size,方塊大小
-UObjectDisplayNames,远景地形生成器_C:在GPU上生成,在GPU上生成,在GPU上生成,Generate on GPU,在GPU上生成
-UObjectDisplayNames,远景地形生成器_C:启用植物摇摆,启用植物摇摆,启用植物摇摆,Enable Plant Sway,啟用植物搖擺
-UObjectDisplayNames,远景地形生成器_C:整体位置偏移,整体位置偏移,整体位置偏移,Overall Position Offset,整體位置偏移
-UObjectDisplayNames,远景地形生成器_C:平原/山脉/水面高度偏移,平原/山脉/水面高度偏移,平原/山脉/水面高度偏移,Plain/Mountain/Water Height Offset,平原/山脈/水面高度偏移
-UObjectDisplayNames,远景地形生成器_C:低洼处填充水面,低洼处填充水面,低洼处填充水面,Fill Water in Depressions,低窪處填充水面
+UObjectDisplayNames,远景地形生成器_C:Blocks,Blocks,方块,Blocks,方塊
+UObjectDisplayNames,远景地形生成器_C:Block Size,Block Size,方块大小,Block Size,方塊大小
+UObjectDisplayNames,远景地形生成器_C:Generate On GPU,Generate on GPU,在GPU上生成,Generate on GP,在GPU上生成
+UObjectDisplayNames,远景地形生成器_C:Enable Plants Sway,Enable Plants Sway,启用植物摇摆,Enable Plants Sway,啟用植物搖擺
+UObjectDisplayNames,远景地形生成器_C:Overall Position Offset,Overall Position Offset,整体位置偏移,Overall Position Offset,整體位置偏移
+UObjectDisplayNames,远景地形生成器_C:Plain/Mountain/Water Height Offset,Plain/ Mountain/ Water Height Offset,平原/山脉/水面高度偏移,Plain/Mountain/Water Height Offset,平原/山脈/水面高度偏移
+UObjectDisplayNames,远景地形生成器_C:Fill Water in Depressions,Fill Water In Depressions,低洼处填充水面,Fill Water in Depressions,低窪處填充水面
 UObjectDisplayNames,远景地形生成器_C:地形纹理,地形纹理,地形纹理,Terrain Texture,地形紋理
 UObjectDisplayNames,远景地形生成器_C:纹理分辨率,纹理分辨率,纹理分辨率,Texture Resolution,紋理解析度
 UObjectDisplayNames,远景地形生成器_C:高度/植被/河流偏移,高度/植被/河流偏移,高度/植被/河流偏移,Height/Vegetation/River Offset,高度/植被/河流偏移
@@ -450,13 +450,13 @@ UObjectDisplayNames,MC角色模板_C:◆开始/停止跑步,◆开始/停止跑�
 UObjectDisplayNames,MC角色模板_C:◆开始跳跃,◆开始跳跃,◆开始跳跃,◆Start Jump,◆開始跳躍
 UObjectDisplayNames,MC角色模板_C:◆小键盘物理事件,◆小键盘物理事件,◆小键盘物理事件,◆Numpad Physics Event,◆小鍵盤物理事件
 UObjectDisplayNames,MC角色模板_C:获取随机数,获取随机数,获取随机数,Get Random Number,獲取隨機數
-UObjectDisplayNames,MC角色模板_C:◆NPC事件,◆NPC事件,◆NPC事件,◆NPC Event,◆NPC事件
+UObjectDisplayNames,MC角色模板_C:◆NPC事件,◆ NPC事件,◆NPC事件,◆NPC Event,◆NPC事件
 UObjectDisplayNames,MC角色模板_C:◆播片,◆播片,◆播片,◆Play Sequence,◆播片
 UObjectDisplayNames,MC角色模板_C:骑乘者,骑乘者,骑乘者,Rider,騎乘者
 UObjectDisplayNames,MC角色模板_C:面向角度/速度/始末距离,面向角度/速度/始末距离,面向角度/速度/始末距离,Facing Angle/Speed/Start End Distance,面向角度/速度/始末距離
-UObjectDisplayNames,MC角色模板_C:材质参数名称2,材质参数名称2,材质参数名称2,Material Parameter Name 2,材質參數名稱2
-UObjectDisplayNames,MC角色模板_C:材质参数浮点2,材质参数浮点2,材质参数浮点2,Material Parameter Float 2,材質參數浮點2
-UObjectDisplayNames,MC角色模板_C:材质参数颜色2,材质参数颜色2,材质参数颜色2,Material Parameter Color 2,材質參數顏色2
+UObjectDisplayNames,MC角色模板_C:材质参数名称2,材质参数名称 2,材质参数名称2,Material Parameter Name 2,材質參數名稱2
+UObjectDisplayNames,MC角色模板_C:材质参数浮点2,材质参数浮点 2,材质参数浮点2,Material Parameter Float 2,材質參數浮點2
+UObjectDisplayNames,MC角色模板_C:材质参数颜色2,材质参数颜色 2,材质参数颜色2,Material Parameter Color 2,材質參數顏色2
 UObjectDisplayNames,MC角色模板_C:Set巡逻目标_66_8FD0F2994636F70924DC1E8FF21861FA,Set巡逻目标_66_8FD0F2994636F70924DC1E8FF21861FA,Set巡逻目标_66_8FD0F2994636F70924DC1E8FF21861FA,Set Patrol Target_66_8FD0F2994636F70924DC1E8FF21861FA,Set巡邏目標_66_8FD0F2994636F70924DC1E8FF21861FA
 UObjectDisplayNames,MC角色模板_C:Set按索引设置材质参数,Set按索引设置材质参数,Set按索引设置材质参数,Set Material Parameter by Index,Set按索引設置材質參數
 UObjectDisplayNames,简单跟随路径控制器_C:自动更新,自动更新,自动更新,Auto Update,自動更新
@@ -851,10 +851,10 @@ UObjectDisplayNames,MC天空_C:日期(天数),日期(天数),日期(天数),Date
 UObjectDisplayNames,MC天空_C:时间(小时),时间(小时),时间(小时),Time (Hours),時間(小時)
 UObjectDisplayNames,MC天空_C:云,云,云,Clouds,雲
 UObjectDisplayNames,MC天空_C:方块日月大小,方块日月大小,方块日月大小,Block Sun/Moon Size,方塊日月大小
-UObjectDisplayNames,MC天空_C:日光/月光/环境光强度,日光/月光/环境光强度,日光/月光/环境光强度,Sunlight/Moonlight/Ambient Intensity,日光/月光/環境光強度
+UObjectDisplayNames,MC天空_C:日光/月光/环境光强度,日光/月光/环境光强度,日光/月光/环境光强度,Sun/Moon/Skylight Intensity,日光/月光/環境光強度
 UObjectDisplayNames,MC天空_C:柔和阴影(日/月),柔和阴影(日/月),柔和阴影(日/月),Soft Shadows (Sun/Moon),柔和陰影(日/月)
-UObjectDisplayNames,MC天空_C:间接光照(日/月/环境光),间接光照(日/月/环境光),间接光照(日/月/环境光),Indirect Lighting (Sun/Moon/Ambient),間接光照(日/月/環境光)
-UObjectDisplayNames,MC天空_C:体积光效应(日/月/环境光),体积光效应(日/月/环境光),体积光效应(日/月/环境光),Volumetric Light Effect (Sun/Moon/Ambient),體積光效應(日/月/環境光)
+UObjectDisplayNames,MC天空_C:间接光照(日/月/环境光),间接光照(日/月/环境光),间接光照(日/月/环境光),Indirect Lighting (Sun/Moon/Sky),間接光照(日/月/環境光)
+UObjectDisplayNames,MC天空_C:体积光效应(日/月/环境光),体积光效应(日/月/环境光),体积光效应(日/月/环境光),Volumetric Light Effect (Sun/Moon/Sky),體積光效應(日/月/環境光)
 UObjectDisplayNames,MC天空_C:日月落山隐藏高度,日月落山隐藏高度,日月落山隐藏高度,Sun/Moon Set Hide Height,日月落山隱藏高度
 UObjectDisplayNames,MC天空_C:日/月光束遮挡+过渡,日/月光束遮挡+过渡,日/月光束遮挡+过渡,Sun/Moon Beam Occlusion + Transition,日/月光束遮擋+過渡
 UObjectDisplayNames,MC天空_C:太阳泛光RGB+亮度A,太阳泛光 RGB+亮度A,太阳泛光RGB+亮度A,Sun Bloom RGB + Intensity A,太陽泛光RGB+亮度A
@@ -864,7 +864,7 @@ UObjectDisplayNames,MC天空_C:雾内散射颜色,雾内散射颜色,雾内散�
 UObjectDisplayNames,MC天空_C:体积雾开始/结束/淡入距离,体积雾开始/结束/淡入距离,体积雾开始/结束/淡入距离,Volumetric Fog Start/End/Fade In Distance,體積霧開始/結束/淡入距離
 UObjectDisplayNames,MC天空_C:体积雾颜色,体积雾颜色,体积雾颜色,Volumetric Fog Color,體積霧顏色
 UObjectDisplayNames,MC天空_C:体积雾各向异性,体积雾各向异性,体积雾各向异性,Volumetric Fog Anisotropy,體積霧各向異性
-UObjectDisplayNames,MC天空_C:阻隔(渲染为透明),阻隔(渲染为透明),阻隔(渲染为透明),Occlusion (Render as Transparent),阻隔(渲染為透明)
+UObjectDisplayNames,MC天空_C:阻隔(渲染为透明),阻隔(渲染为透明),阻隔(渲染为透明),Holdout (Render as Transparent),阻隔(渲染為透明)
 UObjectDisplayNames,MC天空_C:缓存时间,缓存时间,缓存时间,Cache Time,快取時間
 UObjectDisplayNames,MC天空_C:Set总时间-用于关键帧,Set总时间-用于关键帧,Set总时间-用于关键帧,Set Total Time - For Keyframes,Set總時間-用於關鍵幀
 UObjectDisplayNames,Albedo Scale,Albedo Scale,反照率缩放,Albedo Scale,反照率縮放
@@ -959,9 +959,9 @@ UObjectDisplayNames,可破坏方块_C:按索引设置材质参数,按索引设�
 UObjectDisplayNames,可破坏方块_C:材质参数名称,材质参数名称,材质参数名称,Material Parameter Name,材質參數名稱
 UObjectDisplayNames,可破坏方块_C:材质参数浮点,材质参数浮点,材质参数浮点,Material Parameter Float,材質參數浮點
 UObjectDisplayNames,可破坏方块_C:材质参数颜色,材质参数颜色,材质参数颜色,Material Parameter Color,材質參數顏色
-UObjectDisplayNames,可破坏方块_C:材质参数名称2,材质参数名称2,材质参数名稱2,Material Parameter Name2,材質參數名稱2
-UObjectDisplayNames,可破坏方块_C:材质参数浮点2,材质参数浮点2,材质参数浮点2,Material Parameter Float2,材質參數浮點2
-UObjectDisplayNames,可破坏方块_C:材质参数颜色2,材质参数颜色2,材质参数颜色2,Material Parameter Color2,材質參數顏色2
+UObjectDisplayNames,可破坏方块_C:材质参数名称2,材质参数名称 2,材质参数名稱2,Material Parameter Name2,材質參數名稱2
+UObjectDisplayNames,可破坏方块_C:材质参数浮点2,材质参数浮点 2,材质参数浮点2,Material Parameter Float2,材質參數浮點2
+UObjectDisplayNames,可破坏方块_C:材质参数颜色2,材质参数颜色 2,材质参数颜色2,Material Parameter Color2,材質參數顏色2
 UObjectDisplayNames,可破坏方块_C:Set破碎程度,Set破碎程度,Set破碎程度,Set Fracture Level,Set破碎程度
 UObjectDisplayNames,可破坏方块_C:SetJson缓存,SetJson缓存,SetJson缓存,Set Json Cache,SetJson快取
 UObjectDisplayNames,可破坏方块_C:Set按索引设置材质参数,Set按索引设置材质参数,Set按索引设置材质参数,Set Set Material Parameter by Index,Set按索引設置材質參數
@@ -1197,7 +1197,7 @@ UObjectDisplayNames,Mineprep_C:导入纹理,导入纹理,导入纹理,Import Tex
 UObjectDisplayNames,Mineprep_C:更换与优化材质,更换与优化材质,更换与优化材质,Replace and Optimize Material,更換與優化材質
 UObjectDisplayNames,Mineprep_C:导入模型,导入模型,导入模型,Import Model,匯入模型
 UObjectDisplayNames,Mineprep_C:放置模型并选中,放置模型并选中,放置模型并选中,Place Model and Select,放置模型並選中
-UObjectDisplayNames,Mineprep_C:“折叠面板修改名称”,“折叠面板修改名称”,“折叠面板修改名称”,"Fold Panel Modify Name","摺疊面板修改名稱"
+UObjectDisplayNames,Mineprep_C:“折叠面板修改名称”,“折叠面板修改名称”,“折叠面板修改名称”,Fold Panel Modify Name,摺疊面板修改名稱
 UObjectDisplayNames,Mineprep_C:设置声音物理材质,设置声音物理材质,设置声音物理材质,Set Sound Physics Material,設定聲音物理材質
 UObjectDisplayNames,Mineprep_C:准备/更换材质,准备/更换材质,准备/更换材质,Prepare/Replace Material,準備/更換材質
 UObjectDisplayNames,Mineprep_C:优化纹理贴图,优化纹理贴图,优化纹理贴图,Optimize Texture,優化紋理貼圖
@@ -1594,20 +1594,32 @@ UObjectDisplayNames,基础生物模型_C:◆播片,◆播片,◆播片,◆Play S
 UObjectDisplayNames,基础生物模型_C:面向玩家/目标,面向玩家/目标,面向玩家/目标,Face Player/Target,面向玩家/目標
 UObjectDisplayNames,基础生物模型_C:面向角度/速度/始末距离,面向角度/速度/始末距离,面向角度/速度/始末距离,Face Angle/Speed/Start End Distance,面向角度/速度/始末距離
 UObjectDisplayNames,基础生物模型_C:骑乘者,骑乘者,骑乘者,Rider,騎乘者
-UObjectDisplayNames,基础生物模型_C:材质参数名称2,材质参数名称2,材质参数名称2,Material Parameter Name2,材質參數名稱2
-UObjectDisplayNames,基础生物模型_C:材质参数浮点2,材质参数浮点2,材质参数浮点2,Material Parameter Float2,材質參數浮點2
-UObjectDisplayNames,基础生物模型_C:材质参数颜色2,材质参数颜色2,材质参数颜色2,Material Parameter Color2,材質參數顏色2
+UObjectDisplayNames,基础生物模型_C:材质参数名称2,材质参数名称 2,材质参数名称2,Material Parameter Name2,材質參數名稱2
+UObjectDisplayNames,基础生物模型_C:材质参数浮点2,材质参数浮点 2,材质参数浮点2,Material Parameter Float2,材質參數浮點2
+UObjectDisplayNames,基础生物模型_C:材质参数颜色2,材质参数颜色 2,材质参数颜色2,Material Parameter Color2,材質參數顏色2
 UObjectDisplayNames,基础生物模型_C:Set按索引设置材质参数,Set按索引设置材质参数,Set按索引设置材质参数,Set Set Material Parameter by Index,Set按索引設置材質參數
 UObjectDisplayNames,头身分离绑定基础生物模型_C:同步材质至头部,同步材质至头部,同步材质至头部,Sync Material to Head,同步材質至頭部
 UObjectDisplayNames,头身分离绑定基础生物模型_C:头部模型,头部模型,头部模型,Head Mesh,頭部模型
 UObjectDisplayNames,头身分离绑定基础生物模型_C:Set头部模型,Set头部模型,Set头部模型,Set Head Model,Set頭部模型
 UObjectDisplayNames,随机观众模型_C:随机初始动画->权重/速度/偏移,随机初始动画->权重/速度/偏移,随机初始动画->权重/速度/偏移,Random Init Anim->Weight/Speed/Offset,隨機初始動畫->權重/速度/偏移
 UObjectDisplayNames,随机观众模型_C:随机皮肤->权重,随机皮肤->权重,随机皮肤->权重,Random Skin->Weight,隨機皮膚->權重
+UObjectDisplayNames,自定义按键子面板_C:调用的函数->按键绑定,调用的函数->按键绑定,调用的函数->按键绑定,Function to call -> Key binding,調用的函數->按鍵綁定
+UObjectDisplayNames,渲染输出子面板_C:Actor层,Actor层,Actor层,Actor Layers,Actor層
+UObjectDisplayNames,渲染输出子面板_C:单独渲染原图,单独渲染原图,单独渲染原图,Render Original Image,單獨渲染原圖
+UObjectDisplayNames,渲染输出子面板_C:单独渲染其他Actor,单独渲染其他 Actor,单独渲染其他Actor,Render Other Actors,單獨渲染其他Actor
+UObjectDisplayNames,渲染输出子面板_C:开放世界数据层,开放世界数据层,开放世界数据层,Open-World Data Layers,開放世界數據層
 ,,,,,
 ,,,,,
 UObjectDisplayNames,Stencil覆层贴图遮罩,Stencil覆层贴图遮罩,覆层贴图遮罩,Overlay Mask,覆層貼圖遮罩
 UObjectDisplayNames,覆层遮罩,覆层遮罩,覆层遮罩,Overlay Mask,覆層遮罩
 UObjectDisplayNames,创建当前材质的副本,创建当前材质的副本,创建当前材质的副本,Create a copy,創建當前材質的副本
+,,,,,
+,,,,,
+UObjectCategory,🚩时间线 - 创建事件关键帧,🚩时间线 - 创建事件关键帧,🚩时间线 - 创建事件关键帧,🚩Timeline - Create Event Keys,🚩時間綫-創建事件關鍵幀
+UObjectCategory,Mineprep编辑器快捷键绑定,Mineprep编辑器快捷键绑定,Mineprep编辑器快捷键绑定,Mineprep Editor Shortcut Bindings,Mineprep編輯器快捷鍵綁定
+UObjectCategory,"分层渲染（输出多个文件, 每层背景透明）","分层渲染（输出多个文件, 每层背景透明）","分层渲染（输出多个文件, 每层背景透明）","Render Layers (Multiple output, transparent background)",分層渲染（輸出多個文件，每層背景透明）
+UObjectCategory,Default|GPU材质场,Default|GPU材质场,GPU材质场,GPU Material Field,GPU材質場
+,,,,,
 ,,,,,
 ,,,,,
 NiagaraOverviewStack,SetVariablesPrefix,Set:,设置:,Set:,設置:
