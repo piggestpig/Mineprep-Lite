@@ -93,7 +93,7 @@ UObjectDisplayNames,全局重力,全局重力,全局重力,Global Gravity,全域
 UObjectDisplayNames,启用,启用,启用,Enable,啟用
 UObjectDisplayNames,强度/半径/衰减/_,强度/半径/衰减/_,强度/半径/衰减/_,Strength/Radius/Attenuation/_,強度/半徑/衰減/_
 UObjectDisplayNames,材质交互半径,材质交互半径,材质交互半径,Material Interaction Radius,材質互動半徑
-UObjectDisplayNames,生成区域大小,生成区域大小,1,1,1
+UObjectDisplayNames,生成区域大小,生成区域大小,生成区域大小,Spawn Area Size,生成區域大小
 UObjectDisplayNames,初速度,初速度,初速度,Initial Velocity,初速度
 UObjectDisplayNames,每个单元格检测粒子数,每个单元格检测粒子数,每个单元格检测粒子数,Particles Per Cell Detection,每個單元格檢測粒子數
 UObjectDisplayNames,生成位置,生成位置,生成位置,Spawn Location,生成位置
@@ -136,7 +136,7 @@ UObjectDisplayNames,喷溅速度,喷溅速度,喷溅速度,Splash Velocity,噴�
 UObjectDisplayNames,子粒子全局力场权重,子粒子全局力场权重,子粒子全局力场权重,Sub Particle Global Force Field Weight,子粒子全域力場權重
 UObjectDisplayNames,子粒子材质,子粒子材质,子粒子材质,Sub Particle Material,子粒子材質
 UObjectDisplayNames,子粒子重载重力-权重,子粒子重载重力-权重,子粒子重载重力-权重,Sub Particle Override Gravity-Weight,子粒子重載重力-權重
-UObjectDisplayNames,模型,模型,模型,Model,模型
+UObjectDisplayNames,模型,模型,模型,Mesh,模型
 UObjectDisplayNames,滞留半径,滞留半径,滞留半径,Retention Radius,滯留半徑
 UObjectDisplayNames,滞留时间/生成速率,滞留时间/生成速率,滞留时间/生成速率,Retention Time/Spawn Rate,滯留時間/生成速率
 UObjectDisplayNames,生成数量,生成数量,生成数量,Spawn Count,生成數量
@@ -206,7 +206,7 @@ UObjectDisplayNames,激活,激活,激活,Activate,激活
 UObjectDisplayNames,碰撞,碰撞,碰撞,Collision,碰撞
 UObjectDisplayNames,粒子生成数量,粒子生成数量,粒子生成数量,Particle Spawn Count,粒子生成數量
 UObjectDisplayNames,粒子速度,粒子速度,粒子速度,Particle Velocity,粒子速度
-UObjectDisplayNames,全局区分ID,全局区分ID,全局区分ID,Global Distinguish ID,全域區分ID
+UObjectDisplayNames,全局区分ID,全局区分ID,全局区分ID,Global ID,全域區分ID
 UObjectDisplayNames,全局检测粒子上限,全局检测粒子上限,全局检测粒子上限,Global Detection Particle Limit,全域檢測粒子上限
 UObjectDisplayNames,启用环境碰撞箱,启用环境碰撞箱,启用环境碰撞箱,Enable Environment Collision Box,啟用環境碰撞箱
 UObjectDisplayNames,接收全局碰撞,接收全局碰撞,接收全局碰撞,Receive Global Collision,接收全域碰撞
@@ -227,7 +227,6 @@ UObjectDisplayNames,媒体抠像粒子_C:抠像渲染目标,抠像渲染目标,�
 UObjectDisplayNames,媒体抠像粒子_C:后期效果渲染目标,后期效果渲染目标,后期效果渲染目标,Post Effect Render Target,後期效果渲染目標
 UObjectDisplayNames,媒体抠像粒子_C:多帧渲染目标数组,多帧渲染目标数组,多帧渲染目标数组,Multi-Frame Render Target Array,多幀渲染目標陣列
 UObjectDisplayNames,媒体抠像粒子_C:长宽,长宽,长宽,Width/Height,長寬
-UObjectDisplayNames,媒体抠像粒子_C:-还原,#NAME?,#NAME?,#NAME?,#NAME?
 UObjectDisplayNames,媒体抠像粒子_C:阴影,阴影,阴影,Shadows,陰影
 UObjectDisplayNames,媒体抠像粒子_C:高光,高光,高光,Specular,高光
 UObjectDisplayNames,媒体抠像粒子_C:自发光,自发光,自发光,Emissive,自發光
@@ -305,9 +304,9 @@ UObjectDisplayNames,纹理贴图,纹理贴图,纹理贴图,Texture Map,紋理貼
 UObjectDisplayNames,堆放方块_C:方块数量,方块数量,方块数量,Block Count,方塊數量
 UObjectDisplayNames,堆放方块_C:悬空放置,悬空放置,悬空放置,Suspend Placement,懸空放置
 UObjectDisplayNames,堆放方块_C:自定义曲线区域,自定义曲线区域,自定义曲线区域,Custom Curve Area,自訂曲線區域
-UObjectDisplayNames,堆放方块_C:比例（方块1:方块2）,比例（方块1:方块2）,比例（方块1:方块2）,Ratio (Block1:Block2),比例（方塊1:方塊2）
+UObjectDisplayNames,堆放方块_C:比例（方块1:方块2）,比例（方块 1:方块2）,比例（方块1:方块2）,Ratio (Block1:Block2),比例（方塊1:方塊2）
 UObjectDisplayNames,堆放方块_C:方块模型,方块模型,方块模型,Block Mesh,方塊模型
-UObjectDisplayNames,堆放方块_C:方块模型2,方块模型2,方块模型2,Block Mesh 2,方塊模型2
+UObjectDisplayNames,堆放方块_C:方块模型2,方块模型 2,方块模型2,Block Mesh 2,方塊模型2
 UObjectDisplayNames,堆放方块_C:偏移,偏移,偏移,Offset,偏移
 UObjectDisplayNames,堆放方块_C:随机旋转,随机旋转,随机旋转,Random Rotation,隨機旋轉
 UObjectDisplayNames,堆放方块_C:location,location,location,Location,位置
@@ -322,7 +321,6 @@ UObjectDisplayNames,媒体抠像散布器_C:保持原色(无光照),保持原色
 UObjectDisplayNames,媒体抠像散布器_C:抠像渲染目标,抠像渲染目标,抠像渲染目标,Keying Render Target,摳像渲染目標
 UObjectDisplayNames,媒体抠像散布器_C:后期效果渲染目标,后期效果渲染目标,后期效果渲染目标,Post Effect Render Target,後期效果渲染目標
 UObjectDisplayNames,媒体抠像散布器_C:长宽,长宽,长宽,Width/Height,長寬
-UObjectDisplayNames,媒体抠像散布器_C:-还原,#NAME?,#NAME?,#NAME?,#NAME?
 UObjectDisplayNames,媒体抠像散布器_C:阴影,阴影,阴影,Shadows,陰影
 UObjectDisplayNames,媒体抠像散布器_C:高光,高光,高光,Specular,高光
 UObjectDisplayNames,媒体抠像散布器_C:自发光,自发光,自发光,Emissive,自發光
@@ -374,7 +372,7 @@ UObjectDisplayNames,远景地形生成器_C:Blocks,Blocks,方块,Blocks,方塊
 UObjectDisplayNames,远景地形生成器_C:Block Size,Block Size,方块大小,Block Size,方塊大小
 UObjectDisplayNames,远景地形生成器_C:Generate On GPU,Generate on GPU,在GPU上生成,Generate on GP,在GPU上生成
 UObjectDisplayNames,远景地形生成器_C:Enable Plants Sway,Enable Plants Sway,启用植物摇摆,Enable Plants Sway,啟用植物搖擺
-UObjectDisplayNames,远景地形生成器_C:Overall Position Offset,Overall Position Offset,整体位置偏移,Overall Position Offset,整體位置偏移
+UObjectDisplayNames,远景地形生成器_C:Coords Offset XY / Scale XY,Coords Offset XY / Scale XY,坐标偏移XY/缩放XY,Coords Offset XY / Scale XY,坐标偏移XY/缩放XY
 UObjectDisplayNames,远景地形生成器_C:Plain/Mountain/Water Height Offset,Plain/ Mountain/ Water Height Offset,平原/山脉/水面高度偏移,Plain/Mountain/Water Height Offset,平原/山脈/水面高度偏移
 UObjectDisplayNames,远景地形生成器_C:Fill Water in Depressions,Fill Water In Depressions,低洼处填充水面,Fill Water in Depressions,低窪處填充水面
 UObjectDisplayNames,远景地形生成器_C:地形纹理,地形纹理,地形纹理,Terrain Texture,地形紋理
@@ -405,8 +403,6 @@ UObjectDisplayNames,UI界面编辑器_C:仅在边界内显示,仅在边界内显
 UObjectDisplayNames,UI界面编辑器_C:UI控件,UI控件,UI控件,UI Controls,UI控件
 UObjectDisplayNames,UI界面编辑器_C:画面尺寸,画面尺寸,画面尺寸,Screen Size,畫面尺寸
 UObjectDisplayNames,UI界面编辑器_C:后期处理材质,后期处理材质,后期处理材质,Post Process Material,後期處理材質
-UObjectDisplayNames,UI界面编辑器_C:+文本,#NAME?,#NAME?,#NAME?,#NAME?
-UObjectDisplayNames,UI界面编辑器_C:+图像,#NAME?,#NAME?,#NAME?,#NAME?
 UObjectDisplayNames,UI界面编辑器_C:刷新,刷新,刷新,Refresh,刷新
 UObjectDisplayNames,UI组件_C:可拖拽,可拖拽,可拖拽,Draggable,可拖拽
 UObjectDisplayNames,UI组件_C:控件类,控件类,控件类,Widget Class,控件類
@@ -1338,7 +1334,6 @@ UObjectDisplayNames,媒体抠像播放器_C:拉伸图像,拉伸图像,拉伸图�
 UObjectDisplayNames,媒体抠像播放器_C:保持原色(无光照),保持原色(无光照),保持原色(无光照),Preserve Original Color (No Lighting),保持原色(無光照)
 UObjectDisplayNames,媒体抠像播放器_C:启用辅助碰撞箱,启用辅助碰撞箱,启用辅助碰撞箱,Enable Auxiliary Collision Box,啟用輔助碰撞箱
 UObjectDisplayNames,媒体抠像播放器_C:PCGactor,PCGactor,PCGactor,PCG Actor,PCG Actor
-UObjectDisplayNames,媒体抠像播放器_C:-还原,#NAME?,#NAME?,#NAME?,#NAME?
 UObjectDisplayNames,媒体抠像播放器_C:阴影,阴影,阴影,Shadows,陰影
 UObjectDisplayNames,媒体抠像播放器_C:高光,高光,高光,Specular,高光
 UObjectDisplayNames,媒体抠像播放器_C:自发光,自发光,自发光,Emissive,自發光
@@ -1404,12 +1399,9 @@ UObjectDisplayNames,双眼移动_缩放,双眼移动_缩放,双眼移动_缩放,
 UObjectDisplayNames,右眼贴图,右眼贴图,右眼贴图,Right Eye Texture,右眼貼圖
 UObjectDisplayNames,左眼贴图,左眼贴图,左眼贴图,Left Eye Texture,左眼貼圖
 UObjectDisplayNames,嘴贴图,嘴贴图,嘴贴图,Mouth Texture,嘴貼圖
-UObjectDisplayNames,#NAME?,#NAME?,#NAME?,#NAME?,#NAME?
 UObjectDisplayNames,左眉毛_上下移动,左眉毛_上下移动,左眉毛_上下移动,Left Eyebrow_Up Down Move,左眉毛_上下移動
 UObjectDisplayNames,右眉毛_上下移动,右眉毛_上下移动,右眉毛_上下移动,Right Eyebrow_Up Down Move,右眉毛_上下移動
 UObjectDisplayNames,🔲使用眉毛,🔲使用眉毛,🔲使用眉毛,🔲Use Eyebrows,🔲使用眉毛
-UObjectDisplayNames,#NAME?,#NAME?,#NAME?,#NAME?,#NAME?
-UObjectDisplayNames,#NAME?,#NAME?,#NAME?,#NAME?,#NAME?
 UObjectDisplayNames,裁剪表情贴图_上下左右,裁剪表情贴图_上下左右,裁剪表情贴图_上下左右,Crop Expression Map_Up Down Left Right,裁剪表情貼圖_上下左右
 UObjectDisplayNames,替换表情贴图,替换表情贴图,替换表情贴图,Replace Expression Map,替換表情貼圖
 UObjectDisplayNames,内层2(村民职业),内层2(村民职业),内层2(村民职业),Inner Layer 2 (Villager Profession),內層2(村民職業)
@@ -1608,8 +1600,110 @@ UObjectDisplayNames,渲染输出子面板_C:Actor层,Actor层,Actor层,Actor Lay
 UObjectDisplayNames,渲染输出子面板_C:单独渲染原图,单独渲染原图,单独渲染原图,Render Original Image,單獨渲染原圖
 UObjectDisplayNames,渲染输出子面板_C:单独渲染其他Actor,单独渲染其他 Actor,单独渲染其他Actor,Render Other Actors,單獨渲染其他Actor
 UObjectDisplayNames,渲染输出子面板_C:开放世界数据层,开放世界数据层,开放世界数据层,Open-World Data Layers,開放世界數據層
+UObjectDisplayNames,MC导播台_C:◆批量粒子事件,◆批量粒子事件,◆批量粒子事件,◆Batch Particle Event,◆批量粒子事件
+UObjectDisplayNames,出生/死亡/碰撞/交互子粒子数,出生/死亡/碰撞/交互子粒子数,出生/死亡/碰撞/交互子粒子数,Birth/Death/Collision/Interaction Sub Particle Count,出生/死亡/碰撞/互動子粒子數
+UObjectDisplayNames,初始化批量生成,初始化批量生成,初始化批量生成,Init Batch Spawn,初始化批量生成
+UObjectDisplayNames,召唤全局子粒子,召唤全局子粒子,召唤全局子粒子,Summon Global Sub Particles,召喚全域子粒子
+UObjectDisplayNames,子粒子全局ID,子粒子全局ID,子粒子全局ID,Sub Particle Global ID,子粒子全域ID
+UObjectDisplayNames,批量生成数/间隔时间,批量生成数/间隔时间,批量生成数/间隔时间,Batch Spawn Count/Interval Time,批量生成數/間隔時間
+UObjectDisplayNames,批量生成阵列,批量生成阵列,批量生成阵列,Batch Spawn Array,批量生成陣列
+UObjectDisplayNames,曲线倍率-单次上限,曲线倍率-单次上限,曲线倍率-单次上限,Curve Multiplier-Single Cap,曲線倍率-單次上限
+UObjectDisplayNames,生命周期->每粒子每秒生成数量,生命周期->每粒子每秒生成数量,生命周期->每粒子每秒生成数量,Lifetime->Spawn Count Per Particle Per Second,生命週期->每粒子每秒生成數量
+UObjectDisplayNames,生成位置偏移,生成位置偏移,生成位置偏移,Spawn Position Offset,生成位置偏移
+UObjectDisplayNames,生成速率/生命周期,生成速率/生命周期,生成速率/生命周期,Spawn Rate/Lifetime,生成速率/生命週期
+UObjectDisplayNames,阵列XYZ数量,阵列XYZ数量,阵列XYZ数量,Array XYZ Count,陣列XYZ數量
+UObjectDisplayNames,EffectorDefaultColor,EffectorDefaultColor,EffectorDefaultColor,Effector Default Color,EffectorDefaultColor
+UObjectDisplayNames,EffectorIndexArray,EffectorIndexArray,EffectorIndexArray,Effector Index Array,EffectorIndexArray
+UObjectDisplayNames,TreeStructTable,TreeStructTable,TreeStructTable,Tree Struct Table,TreeStructTable
+UObjectDisplayNames,XYZ方块数量,XYZ方块数量,XYZ方块数量,XYZ Block Count,XYZ方塊數量
+UObjectDisplayNames,低洼处填充水面,低洼处填充水面,低洼处填充水面,Fill Water in Depressions,低窪處填充水面
+UObjectDisplayNames,全局坐标偏移,全局坐标偏移,全局坐标偏移,Global Coordinate Offset,全域座標偏移
+UObjectDisplayNames,全局坐标缩放,全局坐标缩放,全局坐标缩放,Global Coordinate Scale,全域座標縮放
+UObjectDisplayNames,剔除内部方块,剔除内部方块,剔除内部方块,Cull Internal Blocks,剔除內部方塊
+UObjectDisplayNames,同时剔除边界方块,同时剔除边界方块,同时剔除边界方块,Also Cull Boundary Blocks,同時剔除邊界方塊
+UObjectDisplayNames,启用植物摇摆,启用植物摇摆,启用植物摇摆,Enable Plants Sway,啟用植物搖擺
+UObjectDisplayNames,地形纹理,地形纹理,地形纹理,Terrain Texture,地形紋理
+UObjectDisplayNames,地形纹理更新间隔(s),地形纹理更新间隔(s),地形纹理更新间隔(s),Terrain Texture Update Interval (s),地形紋理更新間隔(s)
+UObjectDisplayNames,平原/山脉/水面高度偏移,平原/山脉/水面高度偏移,平原/山脉/水面高度偏移,Plain/Mountain/Water Height Offset,平原/山脈/水面高度偏移
+UObjectDisplayNames,方块,方块,方块,Block,方塊
+UObjectDisplayNames,方块间距,方块间距,方块间距,Block Spacing,方塊間距
+UObjectDisplayNames,树木方块索引映射,树木方块索引映射,树木方块索引映射,Tree Block Index Mapping,樹木方塊索引映射
+UObjectDisplayNames,生物群系纹理,生物群系纹理,生物群系纹理,Biome Texture,生物群系紋理
+UObjectDisplayNames,自定义颜色,自定义颜色,自定义颜色,Custom Color,自訂顏色
+UObjectDisplayNames,读取纹理颜色,读取纹理颜色,读取纹理颜色,Read Texture Color,讀取紋理顏色
+UObjectDisplayNames,动态地形粒子_C:地形纹理,地形纹理,地形纹理,Terrain Texture,地形紋理
+UObjectDisplayNames,动态地形粒子_C:RT,RT,RT,RT,RT
+UObjectDisplayNames,动态地形粒子_C:Mat,Mat,Mat,Mat,Mat
+UObjectDisplayNames,动态地形粒子_C:高度/植被/河流偏移,高度/植被/河流偏移,高度/植被/河流偏移,Height/Vegetation/River Offset,高度/植被/河流偏移
+UObjectDisplayNames,动态地形粒子_C:高度/植被/河流缩放,高度/植被/河流缩放,高度/植被/河流缩放,Height/Vegetation/River Scale,高度/植被/河流縮放
+UObjectDisplayNames,动态地形粒子_C:高度/植被/河流乘方,高度/植被/河流乘方,高度/植被/河流乘方,Height/Vegetation/River Power,高度/植被/河流乘方
+UObjectDisplayNames,动态地形粒子_C:高度/植被/河流模糊,高度/植被/河流模糊,高度/植被/河流模糊,Height/Vegetation/River Blur,高度/植被/河流模糊
+UObjectDisplayNames,动态地形粒子_C:地形边界衰减,地形边界衰减,地形边界衰减,Terrain Boundary Attenuation,地形邊界衰減
+UObjectDisplayNames,动态地形粒子_C:烘焙纹理分辨率,烘焙纹理分辨率,烘焙纹理分辨率,Baked Texture Resolution,烘焙紋理解析度
+UObjectDisplayNames,动态地形粒子_C:效应器,效应器,效应器,Effector,效應器
+UObjectDisplayNames,动态地形粒子_C:刷新,刷新,刷新,Refresh,刷新
+UObjectDisplayNames,动态地形粒子_C:创建链接效应器,创建链接效应器,创建链接效应器,Create Linked Effector,創建連結效應器
+UObjectDisplayNames,动态地形粒子_C:导入视频,导入视频,导入视频,Import Video,匯入影片
+UObjectDisplayNames,初速度/内-外发射角,初速度/内-外发射角,初速度/内-外发射角,Initial Velocity/Inner-Outer Emission Angle,初速度/內-外發射角
+UObjectDisplayNames,分辨率,分辨率,分辨率,Resolution,解析度
+UObjectDisplayNames,过滤RGBA上限,过滤RGBA上限,过滤RGBA上限,RGBA Filter Upper Limit,過濾RGBA上限
+UObjectDisplayNames,过滤RGBA下限,过滤RGBA下限,过滤RGBA下限,RGBA Filter Lower Limit,過濾RGBA下限
+UObjectDisplayNames,曲线区间映射,曲线区间映射,曲线区间映射,Curve Range Mapping,曲線區間映射
+UObjectDisplayNames,曲线半径,曲线半径,曲线半径,Curve Radius,曲線半徑
+UObjectDisplayNames,有序遍历-时长,有序遍历-时长,有序遍历-时长,Ordered Traversal-Duration,有序遍歷-時長
+UObjectDisplayNames,样条曲线,样条曲线,样条曲线,Spline Curve,樣條曲線
+UObjectDisplayNames,限制生成区间,限制生成区间,限制生成区间,Limit Spawn Range,限制生成區間
+UObjectDisplayNames,空心程度,空心程度,空心程度,Hollow Amount,空心程度
+UObjectDisplayNames,采样类型,采样类型,采样类型,Sampling Type,採樣類型
+UObjectDisplayNames,骨骼网格体,骨骼网格体,骨骼网格体,Skeletal Mesh,骨骼網格體
+UObjectDisplayNames,全局粒子生成区域_C:放置曲线,放置曲线,放置曲线,Placement Curve,放置曲線
+UObjectDisplayNames,从图像生成,从图像生成,从图像生成,Generate from Image,從圖像生成
+UObjectDisplayNames,从静态网格体生成,从静态网格体生成,从静态网格体生成,Generate from Static Mesh,從靜態網格體生成
+UObjectDisplayNames,从骨骼网格体生成,从骨骼网格体生成,从骨骼网格体生成,Generate from Skeletal Mesh,從骨骼網格體生成
+UObjectDisplayNames,沿曲线生成,沿曲线生成,沿曲线生成,Generate Along Curve,沿曲線生成
+UObjectDisplayNames,生成方形区域,生成方形区域,生成方形区域,Generate Box Area,生成方形區域
+UObjectDisplayNames,生成球形区域,生成球形区域,生成球形区域,Generate Spherical Area,生成球形區域
+UObjectDisplayNames,冲击波粒子比例/范围,冲击波粒子比例/范围,冲击波粒子比例/范围,Shockwave Particle Ratio/Range,衝擊波粒子比例/範圍
+UObjectDisplayNames,灯光生命周期,灯光生命周期,灯光生命周期,Light Lifetime,燈光生命週期
+UObjectDisplayNames,灯光颜色,灯光颜色,灯光颜色,Light Color,燈光顏色
+UObjectDisplayNames,模型向上偏移,模型向上偏移,模型向上偏移,Model Upward Offset,模型向上偏移
+UObjectDisplayNames,空气阻力/摩擦力,空气阻力/摩擦力,空气阻力/摩擦力,Air Resistance/Friction,空氣阻力/摩擦力
+UObjectDisplayNames,风力,风力,风力,Wind Force,風力
+UObjectDisplayNames,初速度XYZ-径向W,初速度XYZ-径向W,初速度XYZ-径向W,Initial Velocity XYZ-Radial W,初速度XYZ-徑向W
+UObjectDisplayNames,地面碰撞反弹力,地面碰撞反弹力,地面碰撞反弹力,Ground Collision Rebound Force,地面碰撞反彈力
+UObjectDisplayNames,MC角色模板_C:◆全局粒子事件,◆全局粒子事件,◆全局粒子事件,◆Global Particle Event,◆全域粒子事件
+UObjectDisplayNames,软体方块_C:生成解算器,生成解算器,生成解算器,Generate Solver,生成解算器
+UObjectDisplayNames,可破坏方块_C:◆全局粒子事件,◆全局粒子事件,◆全局粒子事件,◆Global Particle Event,◆全域粒子事件
+UObjectDisplayNames,生成器子面板_C:读取英文列,读取英文列,读取英文列,Read English Column,讀取英文列
+UObjectDisplayNames,-眨眼,-眨眼,-眨眼,-Blink,-眨眼
+UObjectDisplayNames,-右眼: 移动_缩放,-右眼: 移动_缩放,-右眼: 移动_缩放,-Right Eye: Move_Scale,-右眼: 移動_縮放
+UObjectDisplayNames,-左眼: 移动_缩放,-左眼: 移动_缩放,-左眼: 移动_缩放,-Left Eye: Move_Scale,-左眼: 移動_縮放
+UObjectDisplayNames,基础生物模型_C:◆全局粒子事件,◆全局粒子事件,◆全局粒子事件,◆Global Particle Event,◆全域粒子事件
+UObjectDisplayNames,媒体抠像粒子_C:-还原,-还原,-还原,-Restore,-還原
+UObjectDisplayNames,媒体抠像散布器_C:-还原,-还原,-还原,-Restore,-還原
+UObjectDisplayNames,UI界面编辑器_C:+文本,+文本,+文本,+Text,+文字
+UObjectDisplayNames,UI界面编辑器_C:+图像,+图像,+图像,+Image,+圖像
+UObjectDisplayNames,媒体抠像播放器_C:-还原,-还原,-还原,-Restore,-還原
+UObjectDisplayNames,材质 (模型/Sprite),材质 (模型/Sprite),材质 (模型/Sprite),Material (Mesh/Sprite),材質 (模型/Sprite)
+UObjectDisplayNames,动画,动画,动画,Animation,動畫
+UObjectDisplayNames,行走,行走,行走,Walk,行走
+UObjectDisplayNames,爬行,爬行,爬行,Crawl,Crawl
+UObjectDisplayNames,Boid模拟 (鸟群/鱼群),Boid模拟 (鸟群/鱼群),Boid模拟 (鸟群/鱼群),Boid Sim (Flock/Fish),Boid模擬 (鳥群/魚群)
+UObjectDisplayNames,碰撞检测,碰撞检测,碰撞检测,Collision Detection,碰撞檢測
 ,,,,,
 ,,,,,
+UObjectDisplayNames,Stencil遮罩,Stencil遮罩,Stencil遮罩,Stencil Mask,Stencil遮罩
+UObjectDisplayNames,次表面颜色+透射,次表面颜色+透射,次表面颜色+透射,SSS Color + Transmit,次表面顔色+透射
+UObjectDisplayNames,不透明度,不透明度,不透明度,Opacity,不透明度
+UObjectDisplayNames,动画速度,动画速度,动画速度,Anim Speed,動畫速度
+UObjectDisplayNames,动画渐变,动画渐变,动画渐变,Gradient Anim,動畫漸變
+UObjectDisplayNames,附魔缩放,附魔缩放,附魔缩放,Enchant Scale,附魔縮放
+UObjectDisplayNames,附魔速度,附魔速度,附魔速度,Enchant Speed,附魔速度
+UObjectDisplayNames,附魔对比度,附魔对比度,附魔对比度,Enchant Contrast,附魔對比度
+UObjectDisplayNames,折射率,折射率,折射率,Refraction IOR,折射率
+UObjectDisplayNames,模糊,模糊,模糊,Blur,模糊
+UObjectDisplayNames,自定义,自定义,自定义,Custom,自定義
+UObjectDisplayNames,覆层颜色,覆层颜色,覆层颜色,Overlay Color,覆層顔色
 UObjectDisplayNames,Stencil覆层贴图遮罩,Stencil覆层贴图遮罩,覆层贴图遮罩,Overlay Mask,覆層貼圖遮罩
 UObjectDisplayNames,覆层遮罩,覆层遮罩,覆层遮罩,Overlay Mask,覆層遮罩
 UObjectDisplayNames,创建当前材质的副本,创建当前材质的副本,创建当前材质的副本,Create a copy,創建當前材質的副本
@@ -1619,9 +1713,104 @@ UObjectCategory,🚩时间线 - 创建事件关键帧,🚩时间线 - 创建事�
 UObjectCategory,Mineprep编辑器快捷键绑定,Mineprep编辑器快捷键绑定,Mineprep编辑器快捷键绑定,Mineprep Editor Shortcut Bindings,Mineprep編輯器快捷鍵綁定
 UObjectCategory,"分层渲染（输出多个文件, 每层背景透明）","分层渲染（输出多个文件, 每层背景透明）","分层渲染（输出多个文件, 每层背景透明）","Render Layers (Multiple output, transparent background)",分層渲染（輸出多個文件，每層背景透明）
 UObjectCategory,Default|GPU材质场,Default|GPU材质场,GPU材质场,GPU Material Field,GPU材質場
+UObjectDisplayNames,粒子生成,粒子生成,粒子生成,Particle Spawn,粒子生成
+UObjectDisplayNames,力场,力场,力场,Force Field,力場
+UObjectDisplayNames,子粒子,子粒子,子粒子,Sub-Particles,子粒子
+UObjectDisplayNames,植物种类基础密度(%),植物种类基础密度(%),植物种类基础密度(%),Base Density for Plant Type (%),植物種類基礎密度(%)
+UObjectDisplayNames,环境碰撞,环境碰撞,环境碰撞,Environmental Collision,環境碰撞
+UObjectDisplayNames,涡旋力/中心吸引,涡旋力/中心吸引,涡旋力/中心吸引,Vortex Force / Attraction,渦旋力/中心吸引
+UObjectDisplayNames,无,无,无,None,無
+UObjectDisplayNames,线性力,线性力,线性力,Linear Force,線性力
+UObjectDisplayNames,线性速度,线性速度,线性速度,Linear Velocity,線性速度
+UObjectDisplayNames,线性速度+线性力,线性速度+线性力,线性速度+线性力,Linear Velocity + Linear Force,線性速度+線性力
+UObjectDisplayNames,角速度,角速度,角速度,Angular Velocity,角速度
+UObjectDisplayNames,角速度+线性力,角速度+线性力,角速度+线性力,Angular Velocity + Linear Force,角速度+線性力
+UObjectDisplayNames,角速度+线性速度,角速度+线性速度,角速度+线性速度,Angular Velocity + Linear Velocity,角速度+線性速度
+UObjectDisplayNames,角速度+线性速度+线性力,角速度+线性速度+线性力,角速度+线性速度+线性力,Angular Velocity + Linear Velocity + Linear Force,角速度+線性速度+線性力
+UObjectDisplayNames,角扭矩,角扭矩,角扭矩,Angular Torque,角扭矩
+UObjectDisplayNames,角扭矩+线性力,角扭矩+线性力,角扭矩+线性力,Angular Torque + Linear Force,角扭矩+線性力
+UObjectDisplayNames,角扭矩+线性速度,角扭矩+线性速度,角扭矩+线性速度,Angular Torque + Linear Velocity,角扭矩+線性速度
+UObjectDisplayNames,角扭矩+线性速度+线性力,角扭矩+线性速度+线性力,角扭矩+线性速度+线性力,Angular Torque + Linear Velocity + Linear Force,角扭矩+線性速度+線性力
+UObjectDisplayNames,角扭矩+角速度,角扭矩+角速度,角扭矩+角速度,Angular Torque + Angular Velocity,角扭矩+角速度
+UObjectDisplayNames,角扭矩+角速度+线性力,角扭矩+角速度+线性力,角扭矩+角速度+线性力,Angular Torque + Angular Velocity + Linear Force,角扭矩+角速度+線性力
+UObjectDisplayNames,角扭矩+角速度+线性速度,角扭矩+角速度+线性速度,角扭矩+角速度+线性速度,Angular Torque + Angular Velocity + Linear Velocity,角扭矩+角速度+線性速度
+UObjectDisplayNames,角扭矩+角速度+线性速度+线性力,角扭矩+角速度+线性速度+线性力,角扭矩+角速度+线性速度+线性力,Angular Torque + Angular Velocity + Linear Velocity + Linear Force,角扭矩+角速度+線性速度+線性力
+,,,,,
+,,,,,
+UObjectDisplayNames,渲染图像,渲染图像,渲染图像,Render Image,渲染圖像
+UObjectDisplayNames,渲染动画,渲染动画,渲染动画,Render Animation,渲染動畫
+UObjectDisplayNames,打开输出文件夹,打开输出文件夹,打开输出文件夹,Open Output Folder,打開輸出文件夾
+UObjectDisplayNames,重启Mineprep插件面板,重启Mineprep插件面板,重启Mineprep插件面板,Restart Mineprep Panel,重啓Mineprep插件面板
+UObjectDisplayNames,开发,开发,开发,Dev,開發
+UObjectDisplayNames,调试与开发,调试与开发,调试与开发,Debug & Dev,調試與開發
+UObjectDisplayNames,添加MC关卡序列,添加MC关卡序列,添加MC关卡序列,Add MC Sequence,添加MC關卡序列
+UObjectDisplayNames,① 保存渲染设置并切换空关卡,① 保存渲染设置并切换空关卡,① 保存渲染设置并切换空关卡,"① Save render config, open empty map",① 保存渲染設定並切換空關卡
+UObjectDisplayNames,② 从空关卡渲染动画(节约显存),② 从空关卡渲染动画(节约显存),② 从空关卡渲染动画(节约显存),② Then render animation (save VRAM),② 從空關卡渲染動畫(節省顯存)
+UObjectDisplayNames,添加批量播片模板,添加批量播片模板,添加批量播片模板,Add Batch Playing Sequence Template,添加批量播片模板
+UObjectDisplayNames,🎬 渲染带HDR增益图的jpg,🎬 渲染带HDR增益图的jpg,🎬 渲染带HDR增益图的jpg,🎬 Render jpg with HDR Gainmap,🎬 渲染帶HDR增益圖的jpg
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+NiagaraOpInfo,Abs Name,Abs,绝对值 abs,Abs,絕對值 abs
+NiagaraOpInfo,Negate Name,Negate,取反 -,Negate,取反 -
+NiagaraOpInfo,Exp Name,Exp,exp (e^x),Exp,exp (e^x)
+NiagaraOpInfo,Exp2 Name,Exp2,exp2 (2^x),Exp2,exp2 (2^x)
+NiagaraOpInfo,Log Name,Log,log,Log,log
+NiagaraOpInfo,Log2 Name,Log2,log2,Log2,log2
+NiagaraOpInfo,Ceil Name,Ceil,向上取整 ceil,Ceil,向上取整 ceil
+NiagaraOpInfo,Floor Name,Floor,向下取整 floor,Floor,向下取整 floor
+NiagaraOpInfo,Frac Name,Frac,小数部分 frac,Frac,小數部分 frac
+NiagaraOpInfo,Trunc Name,Trunc,截断 trunc,Trunc,截斷 trunc
+NiagaraOpInfo,Sign Name,Sign,符号 sign,Sign,符號 sign
+NiagaraOpInfo,Pow Name,Pow,pow (幂数^) ,Pow,pow (冪數^)
+NiagaraOpInfo,Step Name,Step,阶跃函数 step,Step,階躍函數 step
+NiagaraOpInfo,Normalize Name,Normalize,归一化(单位向量) Normalize,Normalize,歸一化(單位向量) Normalize
+NiagaraOpInfo,Vector Cross Name,Cross,叉积 (cross ×),Cross,叉積 (cross ×)
+NiagaraOpInfo,Pi Name,PI,π（pi）,PI,π（pi）
+NiagaraOpInfo,Two Pi Name,TWO_PI,2π,TWO_PI,2π
+NiagaraOpInfo,One Minus Name,One Minus,1-,One Minus,1-
+NiagaraOpInfo,Dot Name,Dot,点积 (dot·),Dot,點積 (dot·)
+NiagaraOpInfo,Reciprocal Name,Reciprocal,倒数 1/x,Reciprocal,倒数 1/x
+NiagaraOpInfo,Length Name,Length,长度 length,Length,長度 length
+NiagaraOpInfo,Max Name,Max,最大值 max,Max,最大值 max
+NiagaraOpInfo,Min Name,Min,最小值 min,Min,最小值 min
+NiagaraOpInfo,Distance Name,Distance,距离 distance,Distance,距離 distance
+NiagaraSchema,NiagaraStaticSwitchMenuDesc,Static Switch,静态开关switch,Static Switch,靜態開關switch
+,,,,,
+UObjectDisplayNames,批量冲击,批量冲击,批量冲击,Batch Impulse,批量衝擊
+UObjectDisplayNames,批量瘫痪,批量瘫痪,批量瘫痪,Batch Paralyze,批量癱瘓
+UObjectDisplayNames,批量跳跃,批量跳跃,批量跳跃,Batch Jump,批量跳躍
+UObjectDisplayNames,批量开始/停止跑步,批量开始/停止跑步,批量开始/停止跑步,Batch Start/Stop Running,批量開始/停止跑步
+UObjectDisplayNames,批量切换动作,批量切换动作,批量切换动作,Batch Switch Action,批量切換動作
+UObjectDisplayNames,批量小键盘物理事件,批量小键盘物理事件,批量小键盘物理事件,Batch Numpad Physics Event,批量小鍵盤物理事件
+UObjectDisplayNames,批量断肢,批量断肢,批量断肢,Batch Dismember,批量斷肢
+UObjectDisplayNames,批量起身,批量起身,批量起身,Batch Get Up,批量起身
+UObjectDisplayNames,批量破坏,批量破坏,批量破坏,Batch Destroy,批量破壞
+UObjectDisplayNames,遥控灯光,遥控灯光,遥控灯光,Remote Light,遙控燈光
+UObjectDisplayNames,批量NPC事件,批量NPC事件,批量NPC事件,Batch NPC Event,批量NPC事件
+UObjectDisplayNames,批量播片,批量播片,批量播片,Batch Play Sequence,批量播片
+UObjectDisplayNames,生命周期轨道,生命周期轨道,生命周期轨道,Lifecycle Track,生命週期軌道
+UObjectDisplayNames,触发器轨道,触发器轨道,触发器轨道,Trigger Track,觸發器軌道
+UObjectDisplayNames,缓存轨道,缓存轨道,缓存轨道,Cache Track,快取軌道
+UObjectDisplayNames,断肢,断肢,断肢,Dismember,斷肢
+UObjectDisplayNames,瘫痪,瘫痪,瘫痪,Paralyze,癱瘓
+UObjectDisplayNames,冲击,冲击,冲击,Impulse,衝擊
+UObjectDisplayNames,起身并恢复动画,起身并恢复动画,起身并恢复动画,Get Up and Resume Anim,起身並恢復動畫
+UObjectDisplayNames,切换动作,切换动作,切换动作,Switch Action,切換動作
+UObjectDisplayNames,开始/停止跑步,开始/停止跑步,开始/停止跑步,Start/Stop Running,開始/停止跑步
+UObjectDisplayNames,开始跳跃,开始跳跃,开始跳跃,Start Jump,開始跳躍
+UObjectDisplayNames,小键盘物理事件,小键盘物理事件,小键盘物理事件,Numpad Physics Event,小鍵盤物理事件
+UObjectDisplayNames,NPC事件,NPC事件,NPC事件,NPC Event,NPC事件
+UObjectDisplayNames,播片,播片,播片,Play Sequence,播片
+UObjectDisplayNames,破坏,破坏,破坏,Destroy,破壞
+UObjectDisplayNames,物理模拟(瘫痪),物理模拟(瘫痪),物理模拟(瘫痪),Physics Simulation (Paralyzed),物理模擬(癱瘓)
+,,,,,
+,,,,,
 ,,,,,
 ,,,,,
 ,,,,,
 NiagaraOverviewStack,SetVariablesPrefix,Set:,设置:,Set:,設置:
 MoviePipelinePIEExecutor,UnsavedMapFailureDialog,"One or more jobs in the queue have an unsaved map as their target map. Maps must be saved at least once before rendering, and then the job must be manually updated to point to the newly saved map.",地图未保存，请保存后再渲染,"One or more jobs in the queue have an unsaved map as their target map. Maps must be saved at least once before rendering, and then the job must be manually updated to point to the newly saved map.",地圖尚未儲存，請先儲存後再進行渲染
 MovieSceneAudioSection,PitchText,Pitch,音高,Pitch,音高
+PCGCustomHLSLElement,NodeTitle,Custom HLSL,Custom HLSL,Custom HLSL,Custom HLSL
