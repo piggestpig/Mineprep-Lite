@@ -1,10 +1,12 @@
 from pathlib import Path
 import json
+import math
 import re
 import struct
 
 import unreal
-from mc_prep import prep_texture
+from mc_prep import prep_texture, colorize_material
+from mc_utils import warn, get_tex_size
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tga", ".bmp", ".exr"}
@@ -13,21 +15,85 @@ SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_]+")
 BLOCK_SIZE_CM = 100.0
 MC_UNIT_TO_CM = BLOCK_SIZE_CM / 16.0
 DEFAULT_GROUP_LAYER = unreal.GeometryScriptGroupLayer()
-BASE_MATERIAL_INSTANCE_PATH = "/Game/Mineprep/材质/Core/LabPBR1_基础_材质实例.LabPBR1_基础_材质实例"
+FACE_NAMES = ("north", "south", "up", "down", "west", "east")
+FACE_CORNER_INDICES = {
+    "north": [0, 1, 2, 3],
+    "south": [5, 4, 7, 6],
+    "up": [1, 0, 4, 5],
+    "down": [7, 6, 2, 3],
+    "west": [4, 0, 3, 7],
+    "east": [1, 5, 6, 2],
+}
+FACE_UV_CORNER_ROLES = {
+    "north": ("tl", "tr", "br", "bl"),
+    "south": ("tr", "tl", "bl", "br"),
+    "up": ("tr", "tl", "bl", "br"),
+    "down": ("bl", "br", "tr", "tl"),
+    # west/east：MC Z→UE Y 后水平方向相对 MC 观察反向，需水平翻转 U（仅换左右，不颠倒 V）
+    "east": ("tr", "tl", "bl", "br"),
+    "west": ("tr", "tl", "bl", "br"),
+}
+DOWN_FACE_UV_CORNER_ROLES = ("tl", "tr", "br", "bl")
+FLUID_BLOCK_NAMES = frozenset({
+    "water",
+    "flowing_water",
+    "lava",
+    "flowing_lava",
+    "bubble_column",
+})
+FLUID_MODEL_ALIASES = {
+    "flowing_water": "water",
+    "flowing_lava": "lava",
+}
+# 旧版方块名 → 现有 models/block 文件名
+BLOCK_MODEL_ALIASES = {
+    "grass_path": "dirt_path",  # 1.17+ 更名
+    "grass": "short_grass",  # 1.20.3+ 短草更名（旧版植物草）
+}
+FLUID_TEXTURE_BY_BLOCK = {
+    "water": "block/water_still",
+    "flowing_water": "block/water_still",
+    "lava": "block/lava_still",
+    "flowing_lava": "block/lava_still",
+    "bubble_column": "block/water_still",
+}
+FLUID_FLOW_TEXTURE_BY_BLOCK = {
+    "water": "block/water_flow",
+    "flowing_water": "block/water_flow",
+    "lava": "block/lava_flow",
+    "flowing_lava": "block/lava_flow",
+    "bubble_column": "block/water_flow",
+}
+FLUID_HORIZONTAL_FACES = frozenset({"up", "down"})
+# uvlock 顶点色 Alpha：按 UE 轴向标记面（材质据此修正 UV）
+# UE X=东/西, UE Y=南/北(MC Z), UE Z=顶/底(MC Y)
+UVLOCK_FACE_AXIS_ALPHA = {
+    "east": 0.94,
+    "west": 0.94,
+    "north": 0.96,
+    "south": 0.96,
+    "up": 0.98,
+    "down": 0.98,
+}
+_CUBE_FACE_NAMES = frozenset(FACE_NAMES)
+BASE_MATERIAL_INSTANCE_PATH = "/Game/Mineprep/材质/Core/LabPBR单面1_材质实例.LabPBR单面1_材质实例"
+ANIMATED_MATERIAL_INSTANCE_PATH = "/Game/Mineprep/材质/Core/LabPBR单面2_材质实例.LabPBR单面2_材质实例"
 BASE_TEXTURE_PARAMETER_NAME = "纹理贴图"
 
-if not hasattr(unreal, "mineprep"):
-    unreal.mineprep = type("MineprepNamespace", (), {})()
+# blockstates 中出现过 uvlock:true 的模型名（不含 .json）缓存
+_UVLOCK_MODEL_NAMES_CACHE = None
 
 
 def _get_mesh_pool():
+    """获取可复用 DynamicMesh 对象池"""
     pool = unreal.GeometryScript_MeshPoolUtility.get_global_mesh_pool()
     if pool is None:
         raise RuntimeError("Failed to get global DynamicMeshPool")
     return pool
 
 
-def _request_dynamic_mesh():
+def _request_dynamic_mesh() -> unreal.DynamicMesh:
+    """从对象池取出或新建 DynamicMesh"""
     mesh = _get_mesh_pool().request_mesh()
     if mesh is None:
         raise RuntimeError("DynamicMeshPool.request_mesh() returned None")
@@ -35,6 +101,7 @@ def _request_dynamic_mesh():
 
 
 def _return_dynamic_mesh(mesh):
+    """归还 DynamicMesh 到对象池"""
     if mesh is None:
         return
     try:
@@ -44,6 +111,7 @@ def _return_dynamic_mesh(mesh):
 
 
 def _as_tuple(value):
+    """把标量或序列规范为 tuple"""
     if isinstance(value, tuple):
         return value
     if value is None:
@@ -51,7 +119,8 @@ def _as_tuple(value):
     return (value,)
 
 
-def _extract_bool(value, default=False):
+def _extract_bool(value, default=False) -> bool:
+    """从嵌套结构中提取布尔值"""
     for item in _as_tuple(value):
         if isinstance(item, bool):
             return item
@@ -59,6 +128,7 @@ def _extract_bool(value, default=False):
 
 
 def _extract_first_of_type(value, unreal_type):
+    """从嵌套结构中提取首个指定 unreal 类型"""
     for item in _as_tuple(value):
         if isinstance(item, unreal_type):
             return item
@@ -66,6 +136,7 @@ def _extract_first_of_type(value, unreal_type):
 
 
 def _extract_list(value):
+    """从嵌套结构中提取列表"""
     for item in _as_tuple(value):
         if isinstance(item, list):
             return list(item)
@@ -79,18 +150,21 @@ def _extract_list(value):
     return []
 
 
-def _asset_path(package_path, asset_name):
+def _asset_path(package_path, asset_name) -> str:
+    """拼接 package_path 与 asset_name 得到资产路径"""
     return f"{package_path}/{asset_name}"
 
 
-def _normalize_source_file(filepath):
+def _normalize_source_file(filepath) -> Path:
+    """规范源文件路径为 Path"""
     source = Path(filepath).expanduser()
     if not source.exists():
         raise FileNotFoundError(f"Source file not found: {source}")
     return source.resolve()
 
 
-def _normalize_package_path(destination_path):
+def _normalize_package_path(destination_path) -> str:
+    """规范 UE 包路径前缀"""
     package_path = str(destination_path).replace("\\", "/").rstrip("/")
     if not package_path.startswith("/Game"):
         raise ValueError(f"destination_path must start with /Game: {package_path}")
@@ -99,12 +173,14 @@ def _normalize_package_path(destination_path):
     return package_path
 
 
-def _sanitize_asset_name(name):
+def _sanitize_asset_name(name) -> str:
+    """清理资产名为合法标识符"""
     cleaned = SAFE_NAME_RE.sub("_", str(name)).strip("_")
     return cleaned or "GeneratedAsset"
 
 
-def _mc_root_path(destination_path, category):
+def _mc_root_path(destination_path, category) -> str:
+    """按 category 得到 /Game/mc/... 根路径"""
     category = str(category).lower()
     if category not in {"block", "item"}:
         raise ValueError(f"Unknown mc category: {category}")
@@ -115,23 +191,29 @@ def _mc_root_path(destination_path, category):
     return _normalize_package_path(f"{base}/{category}")
 
 
-def _mc_texture_path(destination_path, category):
+def _mc_texture_path(destination_path, category) -> str:
+    """贴图资产包路径"""
     return _normalize_package_path(f"{_mc_root_path(destination_path, category)}/tex")
 
 
-def _mc_material_path(destination_path, category):
+def _mc_material_path(destination_path, category) -> str:
+    """材质资产包路径"""
     return _normalize_package_path(f"{_mc_root_path(destination_path, category)}/mat")
 
 
-def _mc_mesh_asset_name(name):
+def _mc_mesh_asset_name(name) -> str:
+    """网格资产名加 SM_ 前缀"""
     return f"▣{_sanitize_asset_name(name)}"
 
 
-def _mc_material_asset_name(name):
+def _mc_material_asset_name(name) -> str:
+    """材质资产名加 MI_ 前缀"""
+    name = name.replace("grass_block_side_overlay", "grass_block_overlay")
     return f"◉{_sanitize_asset_name(name)}"
 
 
 def _load_asset_if_exists(asset_path, asset_type=None):
+    """若资产存在则加载，否则返回 None"""
     if not unreal.EditorAssetLibrary.does_asset_exist(asset_path):
         return None
     asset = unreal.EditorAssetLibrary.load_asset(asset_path)
@@ -142,7 +224,8 @@ def _load_asset_if_exists(asset_path, asset_type=None):
     return asset
 
 
-def _make_import_task(source_file, destination_path, asset_name=None, replace_existing=True):
+def _make_import_task(source_file, destination_path, asset_name=None, replace_existing=True) -> unreal.AssetImportTask:
+    """构造 AssetImportTask"""
     task = unreal.AssetImportTask()
     task.set_editor_property("filename", str(source_file))
     task.set_editor_property("destination_path", destination_path)
@@ -156,6 +239,7 @@ def _make_import_task(source_file, destination_path, asset_name=None, replace_ex
 
 
 def _run_import_task(task):
+    """执行导入任务并校验结果"""
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
     imported = list(task.get_objects())
     if not imported:
@@ -163,7 +247,8 @@ def _run_import_task(task):
     return imported
 
 
-def _vector3(value):
+def _vector3(value) -> unreal.Vector:
+    """转为 unreal.Vector"""
     if isinstance(value, unreal.Vector):
         return value
     if len(value) != 3:
@@ -171,7 +256,8 @@ def _vector3(value):
     return unreal.Vector(float(value[0]), float(value[1]), float(value[2]))
 
 
-def _rotator(value):
+def _rotator(value) -> unreal.Rotator:
+    """转为 unreal.Rotator"""
     if isinstance(value, unreal.Rotator):
         return value
     if len(value) != 3:
@@ -179,19 +265,23 @@ def _rotator(value):
     return unreal.Rotator(float(value[0]), float(value[1]), float(value[2]))
 
 
-def _transform(location=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)):
+def _transform(location=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)) -> unreal.Transform:
+    """由 loc/rot/scale 构造 Transform"""
     return unreal.Transform(location=_vector3(location), rotation=_rotator(rotation), scale=_vector3(scale))
 
 
-def _identity_transform():
+def _identity_transform() -> unreal.Transform:
+    """单位 Transform"""
     return _transform()
 
 
-def _new_dynamic_mesh():
+def _new_dynamic_mesh() -> unreal.DynamicMesh:
+    """新建空 DynamicMesh"""
     return _request_dynamic_mesh()
 
 
 def _array_to_index_list(values, index_type):
+    """Python 序列转为 Index 列表包装"""
     index_list = unreal.GeometryScriptIndexList()
     try:
         unreal.GeometryScript_List.convert_array_to_index_list(list(values), index_list, index_type)
@@ -205,6 +295,7 @@ def _array_to_index_list(values, index_type):
 
 
 def _array_to_uv_list(values):
+    """Python UV 序列转为 UE UV 列表"""
     out = unreal.GeometryScriptUVList()
     try:
         result = unreal.GeometryScript_List.convert_array_to_uv_list(list(values), out)
@@ -219,6 +310,7 @@ def _array_to_uv_list(values):
 
 
 def _index_list_to_array(index_list):
+    """UE Index 列表转回 Python list"""
     out = []
     try:
         result = unreal.GeometryScript_List.convert_index_list_to_array(index_list, out)
@@ -234,6 +326,7 @@ def _index_list_to_array(index_list):
 
 
 def _color_list_to_array(color_list):
+    """UE Color 列表转回 Python list"""
     out = []
     try:
         result = unreal.GeometryScript_List.convert_color_list_to_array(color_list, out)
@@ -248,15 +341,23 @@ def _color_list_to_array(color_list):
     return _extract_list(result)
 
 
-def _get_texture_size(texture_asset):
-    width = texture_asset.blueprint_get_size_x()
-    height = texture_asset.blueprint_get_size_y()
-    return max(int(width), 1), max(int(height), 1)
+def _is_square_texture(texture_asset) -> bool:
+    """判断贴图是否为正方形"""
+    width, height = get_tex_size(texture_asset)
+    return width == height
+
+
+def _material_instance_path_for_texture(texture_asset) -> str:
+    """由贴图路径推导对应材质实例路径"""
+    if _is_square_texture(texture_asset):
+        return BASE_MATERIAL_INSTANCE_PATH
+    return ANIMATED_MATERIAL_INSTANCE_PATH
 
 
 def _sample_texture_alpha_mask(texture_asset, alpha_threshold=0.5, max_resolution=32):
-    orig_width, orig_height = _get_texture_size(texture_asset)
-    
+    """采样贴图 alpha 生成不透明掩码网格"""
+    orig_width, orig_height = get_tex_size(texture_asset)
+
     # 保持宽高比的情况下，将最大分辨率限制在 max_resolution
     width = orig_width
     height = orig_height
@@ -305,6 +406,7 @@ def _sample_texture_alpha_mask(texture_asset, alpha_threshold=0.5, max_resolutio
 
 
 def _get_polygroup_ids(mesh):
+    """列出 DynamicMesh 全部 polygroup id"""
     polygroup_ids_out = unreal.GeometryScriptIndexList()
     result = unreal.GeometryScript_PolyGroups.get_polygroup_i_ds_in_mesh(mesh, DEFAULT_GROUP_LAYER, polygroup_ids_out)
     extracted = _extract_first_of_type(result, unreal.GeometryScriptIndexList)
@@ -314,6 +416,7 @@ def _get_polygroup_ids(mesh):
 
 
 def _get_all_triangle_ids(mesh):
+    """列出全部三角形 id"""
     result = unreal.GeometryScript_MeshQueries.get_all_triangle_i_ds(mesh)
     triangle_id_list = _extract_first_of_type(result, unreal.GeometryScriptIndexList)
     if triangle_id_list is None:
@@ -327,6 +430,7 @@ def _get_all_triangle_ids(mesh):
 
 
 def _get_triangles_in_polygroup(mesh, polygroup_id):
+    """取某 polygroup 内三角形 id"""
     triangle_ids_out = unreal.GeometryScriptIndexList()
     result = unreal.GeometryScript_PolyGroups.get_triangles_in_polygroup(
         mesh,
@@ -340,7 +444,8 @@ def _get_triangles_in_polygroup(mesh, polygroup_id):
     return _index_list_to_array(triangle_ids_out)
 
 
-def _get_triangle_normal(mesh, triangle_id):
+def _get_triangle_normal(mesh, triangle_id) -> unreal.Vector:
+    """计算三角形法线"""
     result = unreal.GeometryScript_MeshQueries.get_triangle_face_normal(mesh, triangle_id)
     normal = _extract_first_of_type(result, unreal.Vector)
     if normal is None:
@@ -354,6 +459,7 @@ def _get_triangle_normal(mesh, triangle_id):
 
 
 def _get_triangle_uvs(mesh, triangle_id, uv_set=0):
+    """读取三角形 UV"""
     result = unreal.GeometryScript_MeshQueries.get_triangle_u_vs(mesh, uv_set, triangle_id)
     uv_values = [item for item in _as_tuple(result) if isinstance(item, unreal.Vector2D)]
     if len(uv_values) != 3 or not _extract_bool(result, default=bool(uv_values)):
@@ -362,6 +468,7 @@ def _get_triangle_uvs(mesh, triangle_id, uv_set=0):
 
 
 def _set_triangle_uvs(mesh, triangle_id, uv_values, uv_set=0):
+    """写入三角形 UV"""
     uv_triangle = unreal.GeometryScriptUVTriangle(uv0=uv_values[0], uv1=uv_values[1], uv2=uv_values[2])
     result = unreal.GeometryScript_UVs.set_mesh_triangle_u_vs(mesh, uv_set, triangle_id, uv_triangle)
     if isinstance(result, tuple) and not _extract_bool(result, default=True):
@@ -369,6 +476,7 @@ def _set_triangle_uvs(mesh, triangle_id, uv_values, uv_set=0):
 
 
 def _set_material_id_on_triangles(mesh, triangle_ids, material_id):
+    """批量设置三角形材质槽"""
     if not triangle_ids:
         return
     triangle_list = _array_to_index_list(triangle_ids, unreal.GeometryScriptIndexType.TRIANGLE)
@@ -376,13 +484,15 @@ def _set_material_id_on_triangles(mesh, triangle_ids, material_id):
 
 
 def _delete_triangles(mesh, triangle_ids):
+    """删除指定三角形"""
     if not triangle_ids:
         return
     triangle_list = _array_to_index_list(triangle_ids, unreal.GeometryScriptIndexType.TRIANGLE)
     unreal.GeometryScript_MeshEdits.delete_triangles_from_mesh(mesh, triangle_list)
 
 
-def _pixel_uv_rect(x_index, y_index, width, height):
+def _pixel_uv_rect(x_index, y_index, width, height) -> tuple[float, float, float, float]:
+    """像素格子对应的 UV 矩形"""
     u_min = float(x_index) / float(width)
     u_max = float(x_index + 1) / float(width)
     v_max = 1.0 - (float(y_index) / float(height))
@@ -391,6 +501,7 @@ def _pixel_uv_rect(x_index, y_index, width, height):
 
 
 def _append_polygon3d(mesh, vertices, uv_rect, material_id=0):
+    """向 DynamicMesh 追加带 UV 的多边形"""
     existing_triangle_ids = set(_get_all_triangle_ids(mesh))
 
     primitive_options = unreal.GeometryScriptPrimitiveOptions()
@@ -414,7 +525,8 @@ def _append_polygon3d(mesh, vertices, uv_rect, material_id=0):
     _apply_uv_rect_to_triangles(mesh, triangle_ids, uv_rect, 0)
 
 
-def _read_png_size(source):
+def _read_png_size(source) -> tuple[int, int]:
+    """读取 PNG 宽高"""
     with source.open("rb") as handle:
         header = handle.read(24)
     if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
@@ -423,7 +535,8 @@ def _read_png_size(source):
     return int(width), int(height)
 
 
-def _read_jpeg_size(source):
+def _read_jpeg_size(source) -> tuple[int, int]:
+    """读取 JPEG 宽高"""
     with source.open("rb") as handle:
         if handle.read(2) != b"\xff\xd8":
             raise ValueError("Not a JPEG file")
@@ -445,7 +558,8 @@ def _read_jpeg_size(source):
     raise ValueError("Could not read JPEG size")
 
 
-def _image_size(source):
+def _image_size(source) -> tuple[int, int]:
+    """按后缀读取图片宽高"""
     suffix = source.suffix.lower()
     try:
         if suffix == ".png":
@@ -457,7 +571,8 @@ def _image_size(source):
     return 16, 16
 
 
-def _import_texture_asset(source, texture_package_path, asset_name=None):
+def _import_texture_asset(source, texture_package_path, asset_name=None) -> unreal.Texture:
+    """导入贴图资产并返回 UTexture"""
     texture_name = _sanitize_asset_name(asset_name or source.stem)
     imported = _run_import_task(_make_import_task(source, texture_package_path, texture_name))
     texture_asset = imported[0]
@@ -465,12 +580,14 @@ def _import_texture_asset(source, texture_package_path, asset_name=None):
     return texture_asset
 
 
-def _create_texture_material(texture_asset, destination_path, asset_name):
+def _create_texture_material(texture_asset, destination_path, asset_name) -> unreal.MaterialInstanceConstant:
+    """为贴图创建/更新材质实例"""
     material_name = _mc_material_asset_name(asset_name)
     material_path = _asset_path(destination_path, material_name)
+    base_material_path = _material_instance_path_for_texture(texture_asset)
     material = _load_asset_if_exists(material_path, unreal.MaterialInstanceConstant)
     if material is None:
-        material = unreal.EditorAssetLibrary.duplicate_asset(BASE_MATERIAL_INSTANCE_PATH, material_path)
+        material = unreal.EditorAssetLibrary.duplicate_asset(base_material_path, material_path)
         if not material:
             raise RuntimeError(f"Failed to duplicate material instance asset: {material_path}")
 
@@ -484,11 +601,13 @@ def _create_texture_material(texture_asset, destination_path, asset_name):
         texture_asset,
     )
 
+    colorize_material(material)
     unreal.EditorAssetLibrary.save_loaded_asset(material)
     return material
 
 
-def _create_static_mesh_asset(dynamic_mesh, asset_path, materials=None):
+def _create_static_mesh_asset(dynamic_mesh, asset_path, materials=None) -> unreal.StaticMesh:
+    """由 DynamicMesh 生成 StaticMesh 资产"""
     static_mesh = _load_asset_if_exists(asset_path, unreal.StaticMesh)
     if static_mesh is None:
         create_options = unreal.GeometryScriptCreateNewStaticMeshAssetOptions()
@@ -512,7 +631,8 @@ def _create_static_mesh_asset(dynamic_mesh, asset_path, materials=None):
     return static_mesh
 
 
-def _infer_face_direction(mesh, polygroup_id):
+def _infer_face_direction(mesh, polygroup_id) -> str:
+    """根据法线推断 MC 方块面朝向名"""
     triangle_ids = _get_triangles_in_polygroup(mesh, polygroup_id)
     if not triangle_ids:
         raise RuntimeError(f"Polygroup has no triangles: {polygroup_id}")
@@ -529,32 +649,245 @@ def _infer_face_direction(mesh, polygroup_id):
     return "south" if normal.y >= 0.0 else "north"
 
 
-def _rotate_uv(u_value, v_value, rotation_deg):
+def _rotate_uv(u_value, v_value, rotation_deg) -> tuple[float, float]:
+    """旋转 UV 坐标（度）"""
     turns = (int(rotation_deg) // 90) % 4
     for _ in range(turns):
         u_value, v_value = v_value, 1.0 - u_value
     return u_value, v_value
 
 
-def _face_uv_rect(face_name, face_uv, bounds_from, bounds_to):
-    if face_uv is None:
-        if face_name in {"north", "south"}:
-            face_uv = [bounds_from[0], 16 - bounds_to[1], bounds_to[0], 16 - bounds_from[1]]
-        elif face_name in {"west", "east"}:
-            face_uv = [bounds_from[2], 16 - bounds_to[1], bounds_to[2], 16 - bounds_from[1]]
-        elif face_name in {"up", "down"}:
-            face_uv = [bounds_from[0], bounds_from[2], bounds_to[0], bounds_to[2]]
-        else:
-            face_uv = [0, 0, 16, 16]
+def _resolve_face_uv_rect(face_name, face_uv, bounds_from, bounds_to):
+    """解析模型 face.uv 为 UV 矩形"""
+    if face_uv is not None:
+        return [float(face_uv[0]), float(face_uv[1]), float(face_uv[2]), float(face_uv[3])]
 
-    u_min = float(face_uv[0]) / 16.0
-    u_max = float(face_uv[2]) / 16.0
-    v_min = 1.0 - (float(face_uv[3]) / 16.0)
-    v_max = 1.0 - (float(face_uv[1]) / 16.0)
-    return u_min, v_min, u_max, v_max
+    if face_name in {"north", "south"}:
+        return [bounds_from[0], 16 - bounds_to[1], bounds_to[0], 16 - bounds_from[1]]
+    if face_name in {"west", "east"}:
+        return [bounds_from[2], 16 - bounds_to[1], bounds_to[2], 16 - bounds_from[1]]
+    if face_name in {"up", "down"}:
+        return [bounds_from[0], bounds_from[2], bounds_to[0], bounds_to[2]]
+    return [0.0, 0.0, 16.0, 16.0]
+
+
+def _compute_face_uv_corners(face_name, face_uv, bounds_from, bounds_to, uv_rotation_deg=0, use_down_winding=False):
+    """计算面四个角的 UV 坐标"""
+    u_min, v_min, u_max, v_max = _resolve_face_uv_rect(face_name, face_uv, bounds_from, bounds_to)
+
+    # MC 与 UE 均使用 V=0 在贴图顶部的约定，直接按角点映射，无需 Blender 镜像。
+    corner_uvs = {
+        "tl": unreal.Vector2D(u_min / 16.0, v_min / 16.0),
+        "tr": unreal.Vector2D(u_max / 16.0, v_min / 16.0),
+        "br": unreal.Vector2D(u_max / 16.0, v_max / 16.0),
+        "bl": unreal.Vector2D(u_min / 16.0, v_max / 16.0),
+    }
+
+    if use_down_winding:
+        role_order = DOWN_FACE_UV_CORNER_ROLES
+    else:
+        role_order = FACE_UV_CORNER_ROLES[face_name]
+
+    uv_turn = (int(uv_rotation_deg) // 90) % 4
+    return [corner_uvs[role_order[(index + uv_turn) % 4]] for index in range(4)]
+
+
+def _position_key(position, precision=4) -> tuple[float, float, float]:
+    """顶点位置量化为可哈希键"""
+    return (
+        round(float(position.x), precision),
+        round(float(position.y), precision),
+        round(float(position.z), precision),
+    )
+
+
+def _get_triangle_positions(mesh, triangle_id):
+    """读取三角形三个顶点坐标"""
+    result = unreal.GeometryScript_MeshQueries.get_triangle_positions(mesh, triangle_id)
+    positions = [item for item in _as_tuple(result) if isinstance(item, unreal.Vector)]
+    if len(positions) != 3:
+        raise RuntimeError(f"Failed to query triangle positions: {triangle_id}")
+    return positions
+
+
+def _set_uv_corners_on_triangles(mesh, triangle_ids, vertices, uv_corners):
+    """按角点映射给三角形写 UV"""
+    uv_by_position = {}
+    for vertex, uv_value in zip(vertices, uv_corners):
+        uv_by_position[_position_key(vertex)] = uv_value
+
+    for triangle_id in triangle_ids:
+        triangle_positions = _get_triangle_positions(mesh, triangle_id)
+        triangle_uvs = []
+        for position in triangle_positions:
+            uv_value = uv_by_position.get(_position_key(position))
+            if uv_value is None:
+                raise RuntimeError(f"Failed to match triangle UV for triangle {triangle_id}")
+            triangle_uvs.append(uv_value)
+        _set_triangle_uvs(mesh, triangle_id, triangle_uvs)
+
+
+def _append_quad_with_uvs(mesh, vertices, uv_corners, material_id=0):
+    """追加四边形并设置 UV；返回新三角形 id 列表"""
+    existing_triangle_ids = set(_get_all_triangle_ids(mesh))
+
+    primitive_options = unreal.GeometryScriptPrimitiveOptions()
+    primitive_options.polygroup_mode = unreal.GeometryScriptPrimitivePolygroupMode.PER_FACE
+    primitive_options.material_id = int(material_id)
+    primitive_options.uv_mode = unreal.GeometryScriptPrimitiveUVMode.UNIFORM
+
+    unreal.GeometryScript_Primitives.append_triangulated_polygon3d(
+        mesh,
+        primitive_options,
+        _identity_transform(),
+        list(vertices),
+    )
+
+    triangle_ids = [triangle_id for triangle_id in _get_all_triangle_ids(mesh) if triangle_id not in existing_triangle_ids]
+    if not triangle_ids:
+        raise RuntimeError("Failed to identify appended quad triangles")
+
+    unreal.GeometryScript_UVs.set_num_uv_sets(mesh, 1)
+    _set_uv_corners_on_triangles(mesh, triangle_ids, vertices, uv_corners)
+    if int(material_id) > 0:
+        _set_material_id_on_triangles(mesh, triangle_ids, material_id)
+    return triangle_ids
+
+
+def _blockstates_dir(models_dir=None) -> Path:
+    """由 models/block 推导同级 blockstates 目录"""
+    if models_dir is None:
+        from mc_config import paths
+        configured = getattr(paths, "blockstates", None)
+        if configured:
+            return Path(configured)
+        models_dir = Path(paths.blocks)
+    models_dir = Path(models_dir)
+    # .../models/block → .../blockstates
+    if models_dir.name == "block" and models_dir.parent.name == "models":
+        return models_dir.parent.parent / "blockstates"
+    return models_dir.parent / "blockstates"
+
+
+def _model_stem_from_blockstate_ref(model_ref) -> str:
+    """minecraft:block/oak_stairs → oak_stairs"""
+    ref = str(model_ref).replace("\\", "/")
+    if ":" in ref:
+        ref = ref.split(":", 1)[1]
+    return Path(ref).name
+
+
+def _collect_uvlock_model_names(blockstates_dir) -> frozenset:
+    """扫描 blockstates：任意变体 uvlock:true 所引用的模型名集合"""
+    names = set()
+    root = Path(blockstates_dir)
+    if not root.is_dir():
+        return frozenset()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("uvlock") is True and "model" in node:
+                names.add(_model_stem_from_blockstate_ref(node["model"]))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    for path in root.glob("*.json"):
+        try:
+            with path.open("r", encoding="utf-8-sig") as handle:
+                walk(json.load(handle))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return frozenset(names)
+
+
+def _get_uvlock_model_names() -> frozenset:
+    """懒加载并缓存有 uvlock 的模型名"""
+    global _UVLOCK_MODEL_NAMES_CACHE
+    if _UVLOCK_MODEL_NAMES_CACHE is None:
+        _UVLOCK_MODEL_NAMES_CACHE = _collect_uvlock_model_names(_blockstates_dir())
+        unreal.log(f"uvlock models cached: {len(_UVLOCK_MODEL_NAMES_CACHE)}")
+    return _UVLOCK_MODEL_NAMES_CACHE
+
+
+def _model_uses_uvlock(model_name) -> bool:
+    """该模型是否在任一 blockstate 变体中使用 uvlock"""
+    stem = _sanitize_asset_name(str(model_name).lower().replace("minecraft:", ""))
+    if stem.endswith(".json"):
+        stem = stem[:-5]
+    return stem in _get_uvlock_model_names()
+
+
+def _is_leaves_model(model_name) -> bool:
+    """树叶方块（正方体但不做 uvlock）"""
+    stem = _sanitize_asset_name(str(model_name).lower().replace("minecraft:", ""))
+    if stem.endswith(".json"):
+        stem = stem[:-5]
+    return stem.endswith("_leaves") or stem == "leaves"
+
+
+def _element_is_full_cube(element) -> bool:
+    """单个 element 是否为 0–16 且含六面的完整正方体"""
+    frm = element.get("from")
+    to = element.get("to")
+    if not frm or not to or len(frm) != 3 or len(to) != 3:
+        return False
+    try:
+        if any(abs(float(frm[i]) - 0.0) > 1e-6 for i in range(3)):
+            return False
+        if any(abs(float(to[i]) - 16.0) > 1e-6 for i in range(3)):
+            return False
+    except (TypeError, ValueError):
+        return False
+    faces = element.get("faces") or {}
+    return _CUBE_FACE_NAMES.issubset(faces.keys())
+
+
+def _model_data_is_full_cube(model_data) -> bool:
+    """合并 parent 后的模型是否含完整正方体（可有 overlay 等额外 element）"""
+    elements = model_data.get("elements") or []
+    return any(_element_is_full_cube(el) for el in elements)
+
+
+def _mesh_selection_from_triangles(mesh, triangle_ids):
+    """三角形 ID → GeometryScriptMeshSelection"""
+    result = unreal.GeometryScript_MeshSelection.convert_index_array_to_mesh_selection(
+        mesh,
+        list(triangle_ids),
+        unreal.GeometryScriptMeshSelectionType.TRIANGLES,
+    )
+    selection = _extract_first_of_type(result, unreal.GeometryScriptMeshSelection)
+    if selection is None:
+        if isinstance(result, (tuple, list)) and len(result) >= 2:
+            selection = result[1] if isinstance(result[1], unreal.GeometryScriptMeshSelection) else result[0]
+        else:
+            selection = result
+    if not isinstance(selection, unreal.GeometryScriptMeshSelection):
+        raise RuntimeError(f"Failed to build mesh selection for uvlock colors: {type(result)}")
+    return selection
+
+
+def _apply_uvlock_vertex_colors(mesh, triangles_by_alpha):
+    """按轴向写入顶点色 Alpha（create_color_seam 避免邻面串色）。
+    triangles_by_alpha: {0.94|0.96|0.98: [triangle_id, ...]}
+    """
+    for alpha, triangle_ids in triangles_by_alpha.items():
+        if not triangle_ids:
+            continue
+        selection = _mesh_selection_from_triangles(mesh, triangle_ids)
+        unreal.GeometryScript_VertexColors.set_mesh_selection_vertex_color(
+            mesh,
+            selection,
+            unreal.LinearColor(1.0, 1.0, 1.0, float(alpha)),
+            unreal.GeometryScriptColorFlags(),
+            create_color_seam=True,
+        )
 
 
 def _apply_uv_rect_to_triangles(mesh, triangle_ids, uv_rect, rotation_deg):
+    """把 UV 矩形应用到三角形集合"""
     current_by_triangle = {}
     all_uvs = []
     for triangle_id in triangle_ids:
@@ -592,7 +925,8 @@ def _apply_uv_rect_to_triangles(mesh, triangle_ids, uv_rect, rotation_deg):
         _set_triangle_uvs(mesh, triangle_id, mapped)
 
 
-def _find_assets_root(source_file):
+def _find_assets_root(source_file) -> Path:
+    """从模型路径向上查找 assets 根目录"""
     for parent in source_file.parents:
         if parent.name == "assets":
             return parent.parent
@@ -600,6 +934,7 @@ def _find_assets_root(source_file):
 
 
 def _resolve_model_reference(model_path, model_ref):
+    """解析 parent/模型相对引用路径"""
     if model_ref.startswith("."):
         return (model_path.parent / model_ref).with_suffix(".json").resolve()
     if ":" in model_ref:
@@ -609,12 +944,65 @@ def _resolve_model_reference(model_path, model_ref):
     return (_find_assets_root(model_path) / "assets" / namespace / "models" / f"{relative_path}.json").resolve()
 
 
-def _resolve_texture_reference(model_path, textures, texture_key):
-    texture_ref = textures[texture_key]
-    while texture_ref.startswith("#"):
-        texture_ref = textures[texture_ref[1:]]
+def _unwrap_texture_value(texture_value):
+    """MC 26.1+: textures may be a string or {"sprite": "...", "force_translucent": bool}."""
+    if isinstance(texture_value, dict):
+        sprite = texture_value.get("sprite")
+        if not isinstance(sprite, str) or not sprite:
+            raise RuntimeError(f"Invalid texture sprite object: {texture_value}")
+        return sprite
+    if isinstance(texture_value, str):
+        return texture_value
+    raise RuntimeError(f"Unsupported texture value type: {type(texture_value).__name__}")
 
-    if texture_ref.startswith("."):
+
+def _normalize_texture_path(path) -> str:
+    """规范纹理引用路径字符串"""
+    path = str(path).replace("\\", "/")
+    if path.startswith("#"):
+        path = path[1:]
+    path = path.replace("/./", "/")
+    if path.startswith("./"):
+        path = path[2:]
+    while "//" in path:
+        path = path.replace("//", "/")
+    if path.lower().endswith(".png"):
+        path = path[:-4]
+    parts = [part for part in path.split("/") if part and part != ".."]
+    path = "/".join(parts)
+    if path.startswith("textures/"):
+        path = path[9:]
+    if path.startswith("/"):
+        path = path[1:]
+    return path
+
+
+def _resolve_texture_key(textures, texture_key, visited=None):
+    """递归解析 #texture 键引用"""
+    if visited is None:
+        visited = set()
+
+    key = texture_key[1:] if str(texture_key).startswith("#") else str(texture_key)
+    if key in visited:
+        raise RuntimeError(f"Texture recursion on key '{key}'")
+    visited.add(key)
+
+    if key not in textures:
+        return key
+
+    value = _unwrap_texture_value(textures[key])
+    if value.startswith("#"):
+        return _resolve_texture_key(textures, value, visited)
+    return value
+
+
+def _resolve_texture_reference(model_path, textures, texture_key):
+    """把纹理键解析为磁盘文件路径"""
+    raw_ref = _resolve_texture_key(textures, texture_key)
+    is_relative = raw_ref.startswith(".")
+    texture_ref = _normalize_texture_path(raw_ref)
+
+    if is_relative:
         texture_path = (model_path.parent / texture_ref).resolve()
     else:
         if ":" in texture_ref:
@@ -629,7 +1017,8 @@ def _resolve_texture_reference(model_path, textures, texture_key):
 
 
 def _load_mc_model(model_path):
-    with model_path.open("r", encoding="utf-8") as handle:
+    """加载并合并 parent 的 MC JSON 模型"""
+    with model_path.open("r", encoding="utf-8-sig") as handle:
         model_data = json.load(handle)
 
     result = {
@@ -653,7 +1042,86 @@ def _load_mc_model(model_path):
     return result
 
 
-def _mc_to_ue_center(bounds_from, bounds_to):
+def _mc_point_to_ue(mc_pos) -> unreal.Vector:
+    """MC 坐标点转到 UE 厘米坐标"""
+    return unreal.Vector(
+        (float(mc_pos[0]) - 8.0) * MC_UNIT_TO_CM,
+        (float(mc_pos[2]) - 8.0) * MC_UNIT_TO_CM,
+        float(mc_pos[1]) * MC_UNIT_TO_CM,
+    )
+
+
+def _mc_rotate_point_raw(mc_pos, origin, axis, angle_deg):
+    """按 MC 元素旋转绕轴旋转点"""
+    axis_index = ord(str(axis).lower()) - ord("x")
+    position = [float(mc_pos[0]), float(mc_pos[1]), float(mc_pos[2])]
+    pivot = [float(origin[0]), float(origin[1]), float(origin[2])]
+    angle_rad = -math.radians(float(angle_deg))
+
+    axis_a = position[(1 + axis_index) % 3]
+    axis_b = position[(2 + axis_index) % 3]
+    axis_c = position[(3 + axis_index) % 3]
+    pivot_a = pivot[(1 + axis_index) % 3]
+    pivot_b = pivot[(2 + axis_index) % 3]
+
+    rotated = [0.0, 0.0, 0.0]
+    rotated[(1 + axis_index) % 3] = math.cos(angle_rad) * (axis_a - pivot_a) + (axis_b - pivot_b) * math.sin(angle_rad) + pivot_a
+    rotated[(2 + axis_index) % 3] = -math.sin(angle_rad) * (axis_a - pivot_a) + math.cos(angle_rad) * (axis_b - pivot_b) + pivot_b
+    rotated[(3 + axis_index) % 3] = axis_c
+    return rotated
+
+
+def _mc_rescale_point_raw(mc_pos, origin, axis, angle_deg):
+    """按 MC rescale 规则缩放点"""
+    axis_index = ord(str(axis).lower()) - ord("x")
+    position = [float(mc_pos[0]), float(mc_pos[1]), float(mc_pos[2])]
+    pivot = [float(origin[0]), float(origin[1]), float(origin[2])]
+    cos_angle = math.cos(math.radians(abs(float(angle_deg))))
+    if cos_angle < 1e-6:
+        return position
+
+    factor = 1.0 / cos_angle
+    scaled = list(position)
+    for index in range(3):
+        if index != axis_index:
+            scaled[index] = pivot[index] + (position[index] - pivot[index]) * factor
+    return scaled
+
+
+def _build_element_corners(bounds_from, bounds_to, rotation=None):
+    """由 from/to/rotation 生成元素 8 角点"""
+    if rotation is None:
+        rotation = {"angle": 0, "axis": "y", "origin": [8, 8, 8]}
+
+    origin = rotation.get("origin", [8, 8, 8])
+    axis = rotation.get("axis", "y")
+    angle = float(rotation.get("angle", 0))
+    rescale = bool(rotation.get("rescale", False))
+
+    mc_corner_specs = [
+        [bounds_from[0], bounds_to[1], bounds_from[2]],
+        [bounds_to[0], bounds_to[1], bounds_from[2]],
+        [bounds_to[0], bounds_from[1], bounds_from[2]],
+        [bounds_from[0], bounds_from[1], bounds_from[2]],
+        [bounds_from[0], bounds_to[1], bounds_to[2]],
+        [bounds_to[0], bounds_to[1], bounds_to[2]],
+        [bounds_to[0], bounds_from[1], bounds_to[2]],
+        [bounds_from[0], bounds_from[1], bounds_to[2]],
+    ]
+
+    corners = []
+    for spec in mc_corner_specs:
+        position = [float(spec[0]), float(spec[1]), float(spec[2])]
+        if angle != 0.0:
+            position = _mc_rotate_point_raw(position, origin, axis, angle)
+            if rescale:
+                position = _mc_rescale_point_raw(position, origin, axis, angle)
+        corners.append(_mc_point_to_ue(position))
+    return corners
+
+
+def _mc_to_ue_center(bounds_from, bounds_to) -> tuple[float, float, float]:
+    """元素包围盒中心转 UE"""
     return (
         ((float(bounds_from[0]) + float(bounds_to[0])) * 0.5 - 8.0) * MC_UNIT_TO_CM,
         ((float(bounds_from[2]) + float(bounds_to[2])) * 0.5 - 8.0) * MC_UNIT_TO_CM,
@@ -661,7 +1129,8 @@ def _mc_to_ue_center(bounds_from, bounds_to):
     )
 
 
-def _mc_to_ue_dimensions(bounds_from, bounds_to):
+def _mc_to_ue_dimensions(bounds_from, bounds_to) -> tuple[float, float, float]:
+    """元素尺寸转 UE 厘米"""
     return (
         max((float(bounds_to[0]) - float(bounds_from[0])) * MC_UNIT_TO_CM, 0.01),
         max((float(bounds_to[2]) - float(bounds_from[2])) * MC_UNIT_TO_CM, 0.01),
@@ -669,7 +1138,8 @@ def _mc_to_ue_dimensions(bounds_from, bounds_to):
     )
 
 
-def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
+def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask) -> unreal.DynamicMesh:
+    """由 alpha 掩码拉伸生成物品厚度网格"""
     pixel_height = len(opaque_mask)
     pixel_width = len(opaque_mask[0]) if pixel_height else 0
     if pixel_width <= 0 or pixel_height <= 0:
@@ -700,13 +1170,14 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
             z_min = z_max - pixel_height_cm
             uv_rect = _pixel_uv_rect(x_index, y_index, pixel_width, pixel_height)
 
+            # 顶点按绕序给出外法线；UE/GeometryScript 左手系下需与 RH 直觉相反
             _append_polygon3d(
                 mesh,
                 [
-                    unreal.Vector(y_min, z_min, half_thickness),
-                    unreal.Vector(y_max, z_min, half_thickness),
-                    unreal.Vector(y_max, z_max, half_thickness),
                     unreal.Vector(y_min, z_max, half_thickness),
+                    unreal.Vector(y_max, z_max, half_thickness),
+                    unreal.Vector(y_max, z_min, half_thickness),
+                    unreal.Vector(y_min, z_min, half_thickness),
                 ],
                 uv_rect,
                 0,
@@ -714,10 +1185,10 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
             _append_polygon3d(
                 mesh,
                 [
-                    unreal.Vector(y_min, z_max, -half_thickness),
-                    unreal.Vector(y_max, z_max, -half_thickness),
-                    unreal.Vector(y_max, z_min, -half_thickness),
                     unreal.Vector(y_min, z_min, -half_thickness),
+                    unreal.Vector(y_max, z_min, -half_thickness),
+                    unreal.Vector(y_max, z_max, -half_thickness),
+                    unreal.Vector(y_min, z_max, -half_thickness),
                 ],
                 uv_rect,
                 0,
@@ -727,10 +1198,10 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
                 _append_polygon3d(
                     mesh,
                     [
-                        unreal.Vector(y_min, z_min, -half_thickness),
-                        unreal.Vector(y_min, z_min, half_thickness),
-                        unreal.Vector(y_min, z_max, half_thickness),
                         unreal.Vector(y_min, z_max, -half_thickness),
+                        unreal.Vector(y_min, z_max, half_thickness),
+                        unreal.Vector(y_min, z_min, half_thickness),
+                        unreal.Vector(y_min, z_min, -half_thickness),
                     ],
                     uv_rect,
                     0,
@@ -739,10 +1210,10 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
                 _append_polygon3d(
                     mesh,
                     [
-                        unreal.Vector(y_max, z_max, -half_thickness),
-                        unreal.Vector(y_max, z_max, half_thickness),
-                        unreal.Vector(y_max, z_min, half_thickness),
                         unreal.Vector(y_max, z_min, -half_thickness),
+                        unreal.Vector(y_max, z_min, half_thickness),
+                        unreal.Vector(y_max, z_max, half_thickness),
+                        unreal.Vector(y_max, z_max, -half_thickness),
                     ],
                     uv_rect,
                     0,
@@ -751,10 +1222,10 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
                 _append_polygon3d(
                     mesh,
                     [
-                        unreal.Vector(y_min, z_max, -half_thickness),
-                        unreal.Vector(y_min, z_max, half_thickness),
-                        unreal.Vector(y_max, z_max, half_thickness),
                         unreal.Vector(y_max, z_max, -half_thickness),
+                        unreal.Vector(y_max, z_max, half_thickness),
+                        unreal.Vector(y_min, z_max, half_thickness),
+                        unreal.Vector(y_min, z_max, -half_thickness),
                     ],
                     uv_rect,
                     0,
@@ -763,10 +1234,10 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
                 _append_polygon3d(
                     mesh,
                     [
-                        unreal.Vector(y_min, z_min, -half_thickness),
-                        unreal.Vector(y_max, z_min, -half_thickness),
-                        unreal.Vector(y_max, z_min, half_thickness),
                         unreal.Vector(y_min, z_min, half_thickness),
+                        unreal.Vector(y_max, z_min, half_thickness),
+                        unreal.Vector(y_max, z_min, -half_thickness),
+                        unreal.Vector(y_min, z_min, -half_thickness),
                     ],
                     uv_rect,
                     0,
@@ -776,6 +1247,7 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask):
 
 
 def _material_context_for_texture(texture_cache, material_cache, texture_source, texture_package, material_package):
+    """缓存并返回贴图对应的材质上下文"""
     texture_key = str(texture_source).lower()
     if texture_key not in texture_cache:
         texture_cache[texture_key] = _import_texture_asset(texture_source, texture_package, texture_source.stem)
@@ -788,7 +1260,150 @@ def _material_context_for_texture(texture_cache, material_cache, texture_source,
     return texture_cache[texture_key], material_cache[texture_key]
 
 
-def _build_block_dynamic_mesh(model_path, destination_path, asset_name):
+def _is_fluid_block_name(name) -> bool:
+    """判断方块名是否为流体"""
+    return str(name).lower().replace("minecraft:", "") in FLUID_BLOCK_NAMES
+
+
+def resolve_block_json_path(block_name, models_dir=None) -> Path:
+    """按方块名解析 models 目录下的 JSON 模型路径，支持旧名/流体别名与 pane→玻璃回退"""
+    if models_dir is None:
+        from mc_config import paths
+        models_dir = Path(paths.blocks)
+
+    stem = _sanitize_asset_name(str(block_name).lower().replace("minecraft:", ""))
+    candidates = [stem]
+    if stem.endswith("_pane"):
+        candidates.append(stem[:-5])
+    for alias_map in (BLOCK_MODEL_ALIASES, FLUID_MODEL_ALIASES):
+        alias = alias_map.get(stem)
+        if alias:
+            candidates.append(alias)
+
+    for candidate in candidates:
+        path = Path(models_dir) / f"{candidate}.json"
+        if path.exists():
+            return path.resolve()
+    return None
+
+
+def get_all_blocks(filter=''):
+    """返回 models/block 下现有 JSON 方块名（无 .json 后缀）。
+
+    filter 为正则，匹配方块名；空字符串返回全部，按字母序。
+    """
+    from mc_config import paths
+    names = sorted(path.stem for path in Path(paths.blocks).glob('*.json'))
+    if filter:
+        pattern = re.compile(filter)
+        names = [name for name in names if pattern.search(name)]
+    return names
+
+
+def _fluid_height_ratio(level) -> float:
+    """流体 level 转为高度比例"""
+    level = int(level)
+    if level <= 0:
+        return 1.0
+    if level >= 8:
+        return 1.0
+    return max(0.125, (8 - level) / 9.0)
+
+
+def _resolve_fluid_texture_path(model_path, model_data, block_name, flow=False):
+    """解析流体 still/flow 贴图路径"""
+    textures = model_data.get("textures") or {}
+    if not flow:
+        particle = textures.get("particle")
+        if particle is not None:
+            try:
+                return _resolve_texture_reference(model_path, textures, "particle")
+            except Exception:
+                pass
+
+    lookup = FLUID_FLOW_TEXTURE_BY_BLOCK if flow else FLUID_TEXTURE_BY_BLOCK
+    fallback = lookup.get(str(block_name).lower().replace("minecraft:", ""))
+    if fallback:
+        return _resolve_texture_reference(model_path, {"fluid": fallback}, "fluid")
+    return None
+
+
+def _fluid_flow_texture_path(still_texture_path) -> Path:
+    """由 still 贴图路径推导 flow 贴图"""
+    still_path = Path(still_texture_path)
+    flow_path = still_path.with_name(still_path.stem.replace("_still", "_flow") + still_path.suffix)
+    if flow_path.exists():
+        return flow_path.resolve()
+    return still_path.resolve()
+
+
+def _build_fluid_dynamic_mesh(model_path, destination_path, asset_name, fluid_level=0):
+    """构建流体方块 DynamicMesh"""
+    block_name = str(asset_name or model_path.stem).lower().replace("minecraft:", "")
+    model_data = _load_mc_model(model_path)
+    still_texture_source = _resolve_fluid_texture_path(model_path, model_data, block_name, flow=False)
+    if still_texture_source is None or not still_texture_source.exists():
+        warn(f"导入流体方块失败: {model_path} (找不到静止流体贴图)")
+        return None
+
+    flow_texture_source = _resolve_fluid_texture_path(model_path, model_data, block_name, flow=True)
+    if flow_texture_source is None or not flow_texture_source.exists():
+        flow_texture_source = _fluid_flow_texture_path(still_texture_source)
+    if not flow_texture_source.exists():
+        warn(f"导入流体方块失败: {model_path} (找不到流动流体贴图)")
+        return None
+
+    height_ratio = _fluid_height_ratio(fluid_level)
+    bounds_from = [0.0, 0.0, 0.0]
+    bounds_to = [16.0, 16.0 * height_ratio, 16.0]
+    full_face_uv = [0.0, 0.0, 16.0, 16.0]
+
+    category = "block"
+    texture_package = _mc_texture_path(destination_path, category)
+    material_package = _mc_material_path(destination_path, category)
+    imported_textures = {}
+    created_materials = {}
+
+    _, still_material = _material_context_for_texture(
+        imported_textures,
+        created_materials,
+        still_texture_source,
+        texture_package,
+        material_package,
+    )
+    _, flow_material = _material_context_for_texture(
+        imported_textures,
+        created_materials,
+        flow_texture_source,
+        texture_package,
+        material_package,
+    )
+
+    target_mesh = _new_dynamic_mesh()
+    corners = _build_element_corners(bounds_from, bounds_to, None)
+    for face_name in FACE_NAMES:
+        material_index = 0 if face_name in FLUID_HORIZONTAL_FACES else 1
+        use_down_winding = face_name == "down"
+        face_indices = list(FACE_CORNER_INDICES[face_name])
+        if use_down_winding:
+            face_indices.reverse()
+
+        face_vertices = [corners[index] for index in face_indices]
+        uv_corners = _compute_face_uv_corners(
+            face_name,
+            full_face_uv,
+            bounds_from,
+            bounds_to,
+            0,
+            use_down_winding=use_down_winding,
+        )
+        _append_quad_with_uvs(target_mesh, face_vertices, uv_corners, material_index)
+
+    return category, target_mesh, [still_material, flow_material]
+
+
+def _build_block_dynamic_mesh(model_path, destination_path, asset_name, fluid_level=0):
+    """由 JSON 模型构建方块 DynamicMesh"""
     model_data = _load_mc_model(model_path)
     elements = model_data.get("elements") or []
     textures = model_data.get("textures") or {}
@@ -800,7 +1415,11 @@ def _build_block_dynamic_mesh(model_path, destination_path, asset_name):
         return "item", item_texture
 
     if not elements:
-        raise RuntimeError(f"Model has no renderable elements: {model_path}")
+        block_name = str(asset_name or model_path.stem).lower().replace("minecraft:", "")
+        if _is_fluid_block_name(block_name):
+            return _build_fluid_dynamic_mesh(model_path, destination_path, block_name, fluid_level)
+        warn(f"导入方块失败: {model_path} (无可渲染元素)")
+        return None
 
     texture_package = _mc_texture_path(destination_path, category)
     material_package = _mc_material_path(destination_path, category)
@@ -810,6 +1429,12 @@ def _build_block_dynamic_mesh(model_path, destination_path, asset_name):
     created_materials = {}
     material_slots = []
     material_slot_index_by_texture = {}
+    model_stem = asset_name or model_path.stem
+    apply_uvlock = (not _is_leaves_model(model_stem)) and (
+        _model_uses_uvlock(model_stem) or _model_data_is_full_cube(model_data)
+    )
+    # Alpha → 三角形列表；默认未写入面保持 Alpha=1
+    uvlock_tris_by_alpha = {0.94: [], 0.96: [], 0.98: []}
 
     def get_material_index(texture_file):
         texture_asset, material_asset = _material_context_for_texture(
@@ -831,67 +1456,64 @@ def _build_block_dynamic_mesh(model_path, destination_path, asset_name):
         if not bounds_from or not bounds_to:
             continue
 
-        box_mesh = _new_dynamic_mesh()
-        try:
-            primitive_options = unreal.GeometryScriptPrimitiveOptions()
-            primitive_options.polygroup_mode = unreal.GeometryScriptPrimitivePolygroupMode.PER_FACE
-            primitive_options.material_id = 0
-            primitive_options.uv_mode = unreal.GeometryScriptPrimitiveUVMode.UNIFORM
+        corners = _build_element_corners(bounds_from, bounds_to, element.get("rotation"))
+        faces = element.get("faces") or {}
 
-            unreal.GeometryScript_Primitives.append_box(
-                box_mesh,
-                primitive_options,
-                _transform(location=_mc_to_ue_center(bounds_from, bounds_to)),
-                *_mc_to_ue_dimensions(bounds_from, bounds_to),
-                0,
-                0,
-                0,
-                unreal.GeometryScriptPrimitiveOriginMode.CENTER,
+        for face_name in FACE_NAMES:
+            face_data = faces.get(face_name)
+            if not face_data:
+                continue
+
+            texture_ref = face_data.get("texture")
+            if not texture_ref:
+                continue
+            # 跳过草地等 #overlay 共面层，避免与 side 闪烁重叠
+            if texture_ref == "#overlay" or texture_ref == "overlay":
+                continue
+
+            if texture_ref.startswith("#"):
+                texture_file = _resolve_texture_reference(model_path, textures, texture_ref[1:])
+            else:
+                texture_file = _resolve_texture_reference(model_path, {"direct": texture_ref}, "direct")
+
+            material_index, _, _ = get_material_index(texture_file)
+            use_down_winding = face_name == "down"
+            face_indices = list(FACE_CORNER_INDICES[face_name])
+            if use_down_winding:
+                face_indices.reverse()
+
+            face_vertices = [corners[index] for index in face_indices]
+            uv_corners = _compute_face_uv_corners(
+                face_name,
+                face_data.get("uv"),
+                bounds_from,
+                bounds_to,
+                face_data.get("rotation", 0),
+                use_down_winding=use_down_winding,
             )
-            unreal.GeometryScript_UVs.set_num_uv_sets(box_mesh, 1)
-
-            faces = element.get("faces") or {}
-            polygroup_ids = _get_polygroup_ids(box_mesh)
-            face_groups = {}
-            for polygroup_id in polygroup_ids:
-                face_groups[_infer_face_direction(box_mesh, polygroup_id)] = polygroup_id
-
-            for face_name, polygroup_id in face_groups.items():
-                triangle_ids = _get_triangles_in_polygroup(box_mesh, polygroup_id)
-                face_data = faces.get(face_name)
-                if not face_data:
-                    _delete_triangles(box_mesh, triangle_ids)
-                    continue
-
-                texture_ref = face_data.get("texture")
-                if not texture_ref:
-                    _delete_triangles(box_mesh, triangle_ids)
-                    continue
-
-                if texture_ref.startswith("#"):
-                    texture_file = _resolve_texture_reference(model_path, textures, texture_ref[1:])
-                else:
-                    texture_file = _resolve_texture_reference(model_path, {"direct": texture_ref}, "direct")
-
-                material_index, _, _ = get_material_index(texture_file)
-                _set_material_id_on_triangles(box_mesh, triangle_ids, material_index)
-                uv_rect = _face_uv_rect(face_name, face_data.get("uv"), bounds_from, bounds_to)
-                _apply_uv_rect_to_triangles(box_mesh, triangle_ids, uv_rect, face_data.get("rotation", 0))
-
-            unreal.GeometryScript_MeshEdits.append_mesh(target_mesh, box_mesh, _identity_transform())
-        finally:
-            _return_dynamic_mesh(box_mesh)
+            triangle_ids = _append_quad_with_uvs(target_mesh, face_vertices, uv_corners, material_index)
+            if apply_uvlock:
+                alpha = UVLOCK_FACE_AXIS_ALPHA.get(face_name)
+                if alpha is not None:
+                    uvlock_tris_by_alpha[alpha].extend(triangle_ids)
 
     if not material_slots:
-        raise RuntimeError(f"Model produced no materials: {model_path}")
+        _return_dynamic_mesh(target_mesh)
+        warn(f"导入方块失败: {model_path} (未产生材质)")
+        return None
+
+    if any(uvlock_tris_by_alpha.values()):
+        _apply_uvlock_vertex_colors(target_mesh, uvlock_tris_by_alpha)
 
     return category, target_mesh, material_slots
 
 
-def _first_static_mesh(imported_assets):
+def _first_static_mesh(imported_assets) -> unreal.StaticMesh:
+    """从导入结果中取第一个 StaticMesh"""
     return next((asset for asset in imported_assets if isinstance(asset, unreal.StaticMesh)), None)
 
 def _generate_collision(mesh, count=4, verts=16, precision=100000):
+    """为 StaticMesh 生成凸包碰撞"""
     mesh_subsystem = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     mesh_subsystem.set_convex_decomposition_collisions(
         mesh, 
@@ -910,7 +1532,8 @@ def import_item(
     alpha_threshold=0.5,
     max_resolution=32,  # 默认上限设为 32x32
     reload=False,       # 新增：是否重新导入
-):
+) -> unreal.StaticMesh:
+    """从贴图导入物品网格；已存在且 reload=False 时直接复用"""
     source = _normalize_source_file(filepath)
     if source.suffix.lower() not in IMAGE_SUFFIXES:
         raise ValueError(f"import_item only supports image files: {source}")
@@ -961,60 +1584,67 @@ def import_block(
     filepath,
     destination_path="/Game/mc",
     asset_name=None,
-    max_resolution=32,  # 添加 max_resolution 参数传给生成的 item
-    reload=False,       # 新增：是否重新导入
-):
+    max_resolution=32,
+    reload=False,
+    fluid_level=0,
+) -> unreal.StaticMesh:
+    """从 JSON 模型或贴图导入方块网格；支持流体高度 fluid_level"""
     source = _normalize_source_file(filepath)
     suffix = source.suffix.lower()
     base_name = _sanitize_asset_name(asset_name or source.stem)
 
     if suffix == ".json":
-        # 针对 JSON 的轻量级预判（只读配置，不触发生成逻辑）
-        model_data = _load_mc_model(source)
-        elements = model_data.get("elements") or []
-        textures = model_data.get("textures") or {}
-        category = "item" if model_data.get("parent") in {"item/generated", "builtin/generated"} else "block"
-
-        # 判断最终的 category 存放夹
-        if not elements and category == "item" and "layer0" in textures:
-            target_root = _mc_root_path(destination_path, "item")
-        else:
-            target_root = _mc_root_path(destination_path, category)
-
-        target_mesh_path = _asset_path(target_root, _mc_mesh_asset_name(base_name))
-        
-        if not reload:
-            existing_mesh = _load_asset_if_exists(target_mesh_path, unreal.StaticMesh)
-            if existing_mesh:
-                unreal.log(f"import_block (json): Asset already exists, skipping: {target_mesh_path}")
-                return existing_mesh
-
-        # 若资产不存在或 reload=True，正常进入构建工作流
-        built = _build_block_dynamic_mesh(source, destination_path, base_name)
-
-        if built[0] == "item" and len(built) == 2:
-            return import_item(
-                built[1],
-                destination_path=destination_path,
-                asset_name=base_name,
-                max_resolution=max_resolution,
-                reload=reload,  # 向下传递 reload 状态
-            )
-
-        category, dynamic_mesh, materials = built
-        model_root = _mc_root_path(destination_path, category)
-
         try:
-            mesh_asset = _create_static_mesh_asset(
-                dynamic_mesh,
-                _asset_path(model_root, _mc_mesh_asset_name(base_name)),
-                materials,
-            )
-            _generate_collision(mesh_asset)
-            unreal.log(f"import_block created from json: {mesh_asset.get_path_name()}")
-            return mesh_asset
-        finally:
-            _return_dynamic_mesh(dynamic_mesh)
+            # 针对 JSON 的轻量级预判（只读配置，不触发生成逻辑）
+            model_data = _load_mc_model(source)
+            elements = model_data.get("elements") or []
+            textures = model_data.get("textures") or {}
+            category = "item" if model_data.get("parent") in {"item/generated", "builtin/generated"} else "block"
+
+            # 判断最终的 category 存放夹
+            if not elements and category == "item" and "layer0" in textures:
+                target_root = _mc_root_path(destination_path, "item")
+            else:
+                target_root = _mc_root_path(destination_path, category)
+
+            target_mesh_path = _asset_path(target_root, _mc_mesh_asset_name(base_name))
+
+            if not reload:
+                existing_mesh = _load_asset_if_exists(target_mesh_path, unreal.StaticMesh)
+                if existing_mesh:
+                    unreal.log(f"import_block (json): Asset already exists, skipping: {target_mesh_path}")
+                    return existing_mesh
+
+            built = _build_block_dynamic_mesh(source, destination_path, base_name, fluid_level)
+            if built is None:
+                return None
+
+            if built[0] == "item" and len(built) == 2:
+                return import_item(
+                    built[1],
+                    destination_path=destination_path,
+                    asset_name=base_name,
+                    max_resolution=max_resolution,
+                    reload=reload,
+                )
+
+            category, dynamic_mesh, materials = built
+            model_root = _mc_root_path(destination_path, category)
+
+            try:
+                mesh_asset = _create_static_mesh_asset(
+                    dynamic_mesh,
+                    _asset_path(model_root, _mc_mesh_asset_name(base_name)),
+                    materials,
+                )
+                _generate_collision(mesh_asset)
+                unreal.log(f"import_block created from json: {mesh_asset.get_path_name()}")
+                return mesh_asset
+            finally:
+                _return_dynamic_mesh(dynamic_mesh)
+        except Exception as exc:
+            warn(f"导入方块失败: {source}", exc)
+            return None
 
     if suffix not in MESH_SUFFIXES:
         raise ValueError(f"import_block only supports json or mesh files: {source}")
@@ -1029,11 +1659,16 @@ def import_block(
             unreal.log(f"import_block (mesh): Asset already exists, skipping: {target_mesh_path}")
             return existing_mesh
 
-    imported_assets = _run_import_task(_make_import_task(source, block_root, _mc_mesh_asset_name(base_name)))
-    mesh_asset = _first_static_mesh(imported_assets)
-    if mesh_asset is None:
-        raise RuntimeError(f"No StaticMesh was imported from: {source}")
+    try:
+        imported_assets = _run_import_task(_make_import_task(source, block_root, _mc_mesh_asset_name(base_name)))
+        mesh_asset = _first_static_mesh(imported_assets)
+        if mesh_asset is None:
+            warn(f"导入方块失败: {source} (未生成 StaticMesh)")
+            return None
 
-    _generate_collision(mesh_asset)
-    unreal.log(f"import_block imported: {mesh_asset.get_path_name()}")
-    return mesh_asset
+        _generate_collision(mesh_asset)
+        unreal.log(f"import_block imported: {mesh_asset.get_path_name()}")
+        return mesh_asset
+    except Exception as exc:
+        warn(f"导入方块失败: {source}", exc)
+        return None
