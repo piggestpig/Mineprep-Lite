@@ -4,9 +4,13 @@ import math
 import re
 import struct
 
-import unreal
-from mc_prep import prep_texture, colorize_material
-from mc_utils import warn, get_tex_size
+try:
+    import unreal
+except ModuleNotFoundError:
+    from mc_utils import Lazy as unreal
+from mc_math import MODEL_FRAME, model_vertices_to_ue
+from mc_prep import prep_texture, colorize_material, _apply_emission_default
+from mc_utils import warn, debug, get_tex_size, throw
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tga", ".bmp", ".exr"}
@@ -78,10 +82,16 @@ UVLOCK_FACE_AXIS_ALPHA = {
 _CUBE_FACE_NAMES = frozenset(FACE_NAMES)
 BASE_MATERIAL_INSTANCE_PATH = "/Game/Mineprep/材质/Core/LabPBR单面1_材质实例.LabPBR单面1_材质实例"
 ANIMATED_MATERIAL_INSTANCE_PATH = "/Game/Mineprep/材质/Core/LabPBR单面2_材质实例.LabPBR单面2_材质实例"
+TWO_SIDED_MATERIAL_INSTANCE_PATH = "/Game/Mineprep/材质/Core/LabPBR1_基础_材质实例.LabPBR1_基础_材质实例"
+TWO_SIDED_ANIMATED_MATERIAL_INSTANCE_PATH = "/Game/Mineprep/材质/Core/LabPBR2_动画_材质实例.LabPBR2_动画_材质实例"
 BASE_TEXTURE_PARAMETER_NAME = "纹理贴图"
+ANIMATION_PARAMETER_NAME = "动画速度/步长/列数/渐变"
 
 # blockstates 中出现过 uvlock:true 的模型名（不含 .json）缓存
 _UVLOCK_MODEL_NAMES_CACHE = None
+# 样式 key → 已建碰撞的原型网格路径。仅当前编辑器会话有效。
+_MESH_STYLE_VERSION = 3
+_MESH_STYLE_CACHE = {}
 
 
 def _get_mesh_pool():
@@ -159,8 +169,28 @@ def _normalize_source_file(filepath) -> Path:
     """规范源文件路径为 Path"""
     source = Path(filepath).expanduser()
     if not source.exists():
-        raise FileNotFoundError(f"Source file not found: {source}")
+        throw(f"Source file not found: {source}")
     return source.resolve()
+
+
+def _resolve_import_source(filepath, category, destination_path):
+    """解析文件路径或默认包中的名称，并隔离自定义命名空间的输出。"""
+    source = Path(filepath).expanduser()
+    name = source.stem
+    if isinstance(filepath, str):
+        match = re.fullmatch(r"(?:([a-z0-9_][a-z0-9_.-]*):)?([a-z0-9_-]+(?:/[a-z0-9_-]+)*)", filepath)
+        if match and (match[1] or "/" not in filepath) and not source.exists():
+            from mc_config import paths
+            namespace, relative = match[1] or "minecraft", match[2]
+            folder, suffix = ("models/block", ".json") if category == "block" else ("textures/item", ".png")
+            source = Path(paths.assets) / namespace / folder / (relative + suffix)
+            name = relative.replace("/", "_")
+            if namespace != "minecraft":
+                name = namespace + "_" + name
+                # 转义特殊字符，避免 a-b、a_b 等命名空间共用输出目录。
+                namespace_folder = namespace.replace("_", "__").replace("-", "_h").replace(".", "_d")
+                destination_path = str(destination_path).rstrip("/") + "/" + namespace_folder
+    return _normalize_source_file(source), name, destination_path
 
 
 def _normalize_package_path(destination_path) -> str:
@@ -202,12 +232,12 @@ def _mc_material_path(destination_path, category) -> str:
 
 
 def _mc_mesh_asset_name(name) -> str:
-    """网格资产名加 SM_ 前缀"""
+    """生成带 ▣ 前缀的网格资产名"""
     return f"▣{_sanitize_asset_name(name)}"
 
 
 def _mc_material_asset_name(name) -> str:
-    """材质资产名加 MI_ 前缀"""
+    """生成带 ◉ 前缀的材质资产名"""
     name = name.replace("grass_block_side_overlay", "grass_block_overlay")
     return f"◉{_sanitize_asset_name(name)}"
 
@@ -347,11 +377,18 @@ def _is_square_texture(texture_asset) -> bool:
     return width == height
 
 
-def _material_instance_path_for_texture(texture_asset) -> str:
-    """由贴图路径推导对应材质实例路径"""
-    if _is_square_texture(texture_asset):
-        return BASE_MATERIAL_INSTANCE_PATH
-    return ANIMATED_MATERIAL_INSTANCE_PATH
+def _material_instance_path_for_texture(texture_asset, *, two_sided=False, texture_source=None) -> str:
+    """根据贴图是否为正方形选择静态或序列帧母材质（优先读取源 PNG 尺寸，避免受 UE 异步编译占位尺寸影响）。"""
+    if texture_source is not None and Path(texture_source).suffix.lower() == '.png':
+        width, height = _read_png_size(Path(texture_source))
+        if min(width, height) <= 0:
+            raise ValueError(f'Invalid PNG dimensions: {texture_source}')
+        square = width == height
+    else:
+        square = _is_square_texture(texture_asset)
+    if square:
+        return TWO_SIDED_MATERIAL_INSTANCE_PATH if two_sided else BASE_MATERIAL_INSTANCE_PATH
+    return TWO_SIDED_ANIMATED_MATERIAL_INSTANCE_PATH if two_sided else ANIMATED_MATERIAL_INSTANCE_PATH
 
 
 def _sample_texture_alpha_mask(texture_asset, alpha_threshold=0.5, max_resolution=32):
@@ -576,20 +613,124 @@ def _import_texture_asset(source, texture_package_path, asset_name=None) -> unre
     texture_name = _sanitize_asset_name(asset_name or source.stem)
     imported = _run_import_task(_make_import_task(source, texture_package_path, texture_name))
     texture_asset = imported[0]
-    prep_texture(texture_asset)
+    prep_texture(texture_asset, detect_normal=True)
     return texture_asset
 
 
-def _create_texture_material(texture_asset, destination_path, asset_name) -> unreal.MaterialInstanceConstant:
+def _animation_step(indices, frame_count):
+    """识别序列帧是顺序循环 (1) 还是往返循环 (-1)，不支持的自定义帧序返回 None。"""
+    count = len(indices)
+    if count == frame_count and all(indices[(i+1) % count] == (value+1) % frame_count
+                                    for i, value in enumerate(indices)):
+        return 1
+    if count == 2*(frame_count-1) and indices.count(0) == 1:
+        start = indices.index(0)
+        expected = (*range(frame_count), *range(frame_count-2, 0, -1))
+        if all(indices[(start+i) % count] == value for i, value in enumerate(expected)):
+            return -1
+    return None
+
+
+def _texture_animation(texture_source):
+    """解析贴图同名 .png.mcmeta 中的动画配置，返回 (播放速度, 步长, 是否插值)，无动画或格式不支持时返回 None。"""
+    if texture_source is None:
+        return None
+    source = Path(texture_source)
+    metadata = Path(str(source) + '.mcmeta')
+    if source.suffix.lower() != '.png' or not metadata.is_file():
+        return None
+
+    def positive(value):
+        return type(value) is int and 0 < value <= 2**31-1
+
+    try:
+        raw = json.loads(metadata.read_text(encoding='utf-8-sig'))
+        if isinstance(raw, dict) and 'animation' not in raw:
+            return None
+        animation = raw.get('animation')
+        frametime = animation.get('frametime', 1)
+        interpolate = animation.get('interpolate', False)
+        width, height = _read_png_size(source)
+        # MC 规范：只指定宽或高时，另一维默认取整张贴图尺寸
+        fw = animation.get('width', width if 'height' in animation else min(width, height))
+        fh = animation.get('height', height if 'width' in animation else min(width, height))
+    except (OSError, ValueError, AttributeError) as exc:
+        debug(f'Animation metadata skipped: {metadata}: {exc}')
+        return None
+    if not all(positive(v) for v in (fw, fh, frametime)) or type(interpolate) is not bool:
+        debug(f'Animation metadata skipped: {metadata}: invalid dimensions, frametime or interpolate')
+        return None
+    if width <= 0 or height <= width or height % width or fw != width or fh != width:
+        debug(f'Animation metadata skipped: {metadata}: only vertical square-frame strips are supported')
+        return None
+
+    duration, step = frametime, 1
+    notes = []
+    if 'frames' in animation:
+        frames = animation['frames']
+        if not isinstance(frames, list) or not frames:
+            debug(f'Animation metadata: {metadata}: custom frames ignored: expected a nonempty list')
+            return 20.0/frametime, 1, int(interpolate)
+        indices, times = [], []
+        for frame in frames:
+            index = frame.get('index') if isinstance(frame, dict) else frame
+            time = frame.get('time', frametime) if isinstance(frame, dict) else frametime
+            if type(index) is not int or not 0 <= index < height//width or not positive(time):
+                debug(f'Animation metadata: {metadata}: custom frames ignored: invalid index or time')
+                return 20.0/frametime, 1, int(interpolate)
+            indices.append(index)
+            times.append(time)
+        if len(set(times)) == 1:
+            duration = times[0]
+        else:
+            notes.append('variable frame times ignored; using global frametime')
+        recognized = _animation_step(indices, height//width)
+        if recognized is None:
+            notes.append('custom frame order ignored; using forward playback')
+        else:
+            step = recognized
+    if notes:
+        debug(f'Animation metadata: {metadata}: ' + '; '.join(notes))
+    return 20.0/duration, step, int(interpolate)
+
+
+def _apply_texture_animation(material, texture_source):
+    """根据 .png.mcmeta 将序列帧动画参数写入材质实例。"""
+    values = _texture_animation(texture_source)
+    if values is None:
+        return
+    library = unreal.MaterialEditingLibrary
+    if ANIMATION_PARAMETER_NAME not in map(str, library.get_vector_parameter_names(material)):
+        debug(f'Animation parameter not found: {ANIMATION_PARAMETER_NAME}: {texture_source}')
+        return
+    current = library.get_material_instance_vector_parameter_value(material, ANIMATION_PARAMETER_NAME)
+    fps, step, interpolate = values
+    flow = Path(texture_source).stem.lower() in {'lava_flow', 'water_flow'}
+    if not library.set_material_instance_vector_parameter_value(
+            material, ANIMATION_PARAMETER_NAME,
+            unreal.LinearColor(fps, 2 if flow else step, 2 if flow else current.b, interpolate)):
+        debug(f'Could not set animation parameter: {texture_source}')
+
+
+def _create_texture_material(texture_asset, destination_path, asset_name, *, two_sided=False, texture_source=None, reload=False) -> unreal.MaterialInstanceConstant:
     """为贴图创建/更新材质实例"""
     material_name = _mc_material_asset_name(asset_name)
     material_path = _asset_path(destination_path, material_name)
-    base_material_path = _material_instance_path_for_texture(texture_asset)
     material = _load_asset_if_exists(material_path, unreal.MaterialInstanceConstant)
+    created = material is None
+    if not created and not reload:
+        return material
+    base_material_path = _material_instance_path_for_texture(
+        texture_asset, two_sided=two_sided, texture_source=texture_source)
     if material is None:
         material = unreal.EditorAssetLibrary.duplicate_asset(base_material_path, material_path)
         if not material:
             raise RuntimeError(f"Failed to duplicate material instance asset: {material_path}")
+    else:
+        parent = unreal.load_asset(base_material_path)
+        if parent is None:
+            raise RuntimeError(f'Failed to load material parent: {base_material_path}')
+        unreal.MaterialEditingLibrary.set_material_instance_parent(material, parent)
 
     material = unreal.MaterialInstanceConstant.cast(material)
     if material is None:
@@ -602,6 +743,9 @@ def _create_texture_material(texture_asset, destination_path, asset_name) -> unr
     )
 
     colorize_material(material)
+    _apply_texture_animation(material, texture_source)
+    if created or reload:
+        _apply_emission_default(material, texture_source)
     unreal.EditorAssetLibrary.save_loaded_asset(material)
     return material
 
@@ -626,8 +770,6 @@ def _create_static_mesh_asset(dynamic_mesh, asset_path, materials=None) -> unrea
 
     write_lod = unreal.GeometryScriptMeshWriteLOD()
     unreal.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(dynamic_mesh, static_mesh, copy_options, write_lod)
-
-    unreal.EditorAssetLibrary.save_loaded_asset(static_mesh)
     return static_mesh
 
 
@@ -829,7 +971,9 @@ def _is_leaves_model(model_name) -> bool:
 
 
 def _element_is_full_cube(element) -> bool:
-    """单个 element 是否为 0–16 且含六面的完整正方体"""
+    """单个 element 是否为 0~16 且含六面的完整正方体"""
+    if float((element.get("rotation") or {}).get("angle", 0)) != 0:
+        return False
     frm = element.get("from")
     to = element.get("to")
     if not frm or not to or len(frm) != 3 or len(to) != 3:
@@ -925,12 +1069,39 @@ def _apply_uv_rect_to_triangles(mesh, triangle_ids, uv_rect, rotation_deg):
         _set_triangle_uvs(mesh, triangle_id, mapped)
 
 
-def _find_assets_root(source_file) -> Path:
-    """从模型路径向上查找 assets 根目录"""
-    for parent in source_file.parents:
+def _local_assets_dir(model_path) -> Path | None:
+    """模型文件自身的 assets 目录；不在资源包内时返回 None。"""
+    for parent in Path(model_path).parents:
         if parent.name == "assets":
-            return parent.parent
-    raise RuntimeError(f"Could not find assets root for: {source_file}")
+            return parent
+    return None
+
+
+def _with_suffix_if_missing(path: Path, suffix: str) -> Path:
+    if path.suffix:
+        return path
+    return path.with_suffix(suffix)
+
+
+def _namespaced_resource(model_path, namespace, category, relative, suffix) -> Path:
+    """先找模型自己的资源包，文件不存在时回退到 paths.assets。"""
+    from mc_config import paths
+
+    relative = str(relative).strip("/")
+    candidates = []
+    local_assets = _local_assets_dir(model_path)
+    if local_assets is not None:
+        candidates.append(local_assets / namespace / category / relative)
+    default = Path(paths.assets) / namespace / category / relative
+    if not candidates or candidates[0] != default:
+        candidates.append(default)
+
+    chosen = None
+    for candidate in candidates:
+        chosen = _with_suffix_if_missing(candidate, suffix)
+        if chosen.exists():
+            return chosen.resolve()
+    return chosen.resolve()
 
 
 def _resolve_model_reference(model_path, model_ref):
@@ -941,11 +1112,11 @@ def _resolve_model_reference(model_path, model_ref):
         namespace, relative_path = model_ref.split(":", 1)
     else:
         namespace, relative_path = "minecraft", model_ref
-    return (_find_assets_root(model_path) / "assets" / namespace / "models" / f"{relative_path}.json").resolve()
+    return _namespaced_resource(model_path, namespace, "models", relative_path, ".json")
 
 
 def _unwrap_texture_value(texture_value):
-    """MC 26.1+: textures may be a string or {"sprite": "...", "force_translucent": bool}."""
+    """提取贴图路径字符串（兼容 MC 26.1+ 的 {"sprite": "...", "force_translucent": bool} 字典格式）。"""
     if isinstance(texture_value, dict):
         sprite = texture_value.get("sprite")
         if not isinstance(sprite, str) or not sprite:
@@ -997,23 +1168,19 @@ def _resolve_texture_key(textures, texture_key, visited=None):
 
 
 def _resolve_texture_reference(model_path, textures, texture_key):
-    """把纹理键解析为磁盘文件路径"""
+    """把纹理键解析为磁盘文件路径。相对路径不回退；命名空间路径回退到 paths.assets。"""
     raw_ref = _resolve_texture_key(textures, texture_key)
     is_relative = raw_ref.startswith(".")
     texture_ref = _normalize_texture_path(raw_ref)
 
     if is_relative:
-        texture_path = (model_path.parent / texture_ref).resolve()
-    else:
-        if ":" in texture_ref:
-            namespace, relative_path = texture_ref.split(":", 1)
-        else:
-            namespace, relative_path = "minecraft", texture_ref
-        texture_path = _find_assets_root(model_path) / "assets" / namespace / "textures" / relative_path
+        return _with_suffix_if_missing(Path(model_path).parent / texture_ref, ".png").resolve()
 
-    if texture_path.suffix:
-        return texture_path
-    return texture_path.with_suffix(".png")
+    if ":" in texture_ref:
+        namespace, relative_path = texture_ref.split(":", 1)
+    else:
+        namespace, relative_path = "minecraft", texture_ref
+    return _namespaced_resource(model_path, namespace, "textures", relative_path, ".png")
 
 
 def _load_mc_model(model_path):
@@ -1040,15 +1207,6 @@ def _load_mc_model(model_path):
         result["elements"] = model_data.get("elements")
 
     return result
-
-
-def _mc_point_to_ue(mc_pos) -> unreal.Vector:
-    """MC 坐标点转到 UE 厘米坐标"""
-    return unreal.Vector(
-        (float(mc_pos[0]) - 8.0) * MC_UNIT_TO_CM,
-        (float(mc_pos[2]) - 8.0) * MC_UNIT_TO_CM,
-        float(mc_pos[1]) * MC_UNIT_TO_CM,
-    )
 
 
 def _mc_rotate_point_raw(mc_pos, origin, axis, angle_deg):
@@ -1116,17 +1274,8 @@ def _build_element_corners(bounds_from, bounds_to, rotation=None):
             position = _mc_rotate_point_raw(position, origin, axis, angle)
             if rescale:
                 position = _mc_rescale_point_raw(position, origin, axis, angle)
-        corners.append(_mc_point_to_ue(position))
-    return corners
-
-
-def _mc_to_ue_center(bounds_from, bounds_to) -> tuple[float, float, float]:
-    """元素包围盒中心转 UE"""
-    return (
-        ((float(bounds_from[0]) + float(bounds_to[0])) * 0.5 - 8.0) * MC_UNIT_TO_CM,
-        ((float(bounds_from[2]) + float(bounds_to[2])) * 0.5 - 8.0) * MC_UNIT_TO_CM,
-        ((float(bounds_from[1]) + float(bounds_to[1])) * 0.5) * MC_UNIT_TO_CM,
-    )
+        corners.append(position)
+    return [unreal.Vector(*map(float, p)) for p in model_vertices_to_ue(corners)]
 
 
 def _mc_to_ue_dimensions(bounds_from, bounds_to) -> tuple[float, float, float]:
@@ -1246,7 +1395,7 @@ def _build_item_dynamic_mesh(width_cm, height_cm, thickness_cm, opaque_mask) -> 
     return mesh
 
 
-def _material_context_for_texture(texture_cache, material_cache, texture_source, texture_package, material_package):
+def _material_context_for_texture(texture_cache, material_cache, texture_source, texture_package, material_package, *, two_sided=False, reload=False):
     """缓存并返回贴图对应的材质上下文"""
     texture_key = str(texture_source).lower()
     if texture_key not in texture_cache:
@@ -1256,6 +1405,9 @@ def _material_context_for_texture(texture_cache, material_cache, texture_source,
             texture_cache[texture_key],
             material_package,
             texture_source.stem,
+            two_sided=two_sided,
+            texture_source=texture_source,
+            reload=reload,
         )
     return texture_cache[texture_key], material_cache[texture_key]
 
@@ -1337,10 +1489,184 @@ def _fluid_flow_texture_path(still_texture_path) -> Path:
     return still_path.resolve()
 
 
-def _build_fluid_dynamic_mesh(model_path, destination_path, asset_name, fluid_level=0):
-    """构建流体方块 DynamicMesh"""
-    block_name = str(asset_name or model_path.stem).lower().replace("minecraft:", "")
-    model_data = _load_mc_model(model_path)
+def _q(value) -> float:
+    """样式 key 用的浮点量化"""
+    return round(float(value), 4)
+
+
+def _quant3(values) -> tuple:
+    """三维坐标量化"""
+    return (_q(values[0]), _q(values[1]), _q(values[2]))
+
+
+def _rotation_key(rotation):
+    """角度为 0 的旋转不进入样式 key"""
+    if not rotation:
+        return None
+    try:
+        angle = float(rotation.get("angle", 0) or 0)
+    except (TypeError, ValueError):
+        angle = 0.0
+    if angle == 0.0:
+        return None
+    origin = rotation.get("origin", [8, 8, 8])
+    return (
+        str(rotation.get("axis", "y")).lower(),
+        _q(angle),
+        _quant3(origin),
+        bool(rotation.get("rescale", False)),
+    )
+
+
+def _uv_key(uv_corners) -> tuple:
+    """四个 UV 角点量化"""
+    return tuple((_q(uv.x), _q(uv.y)) for uv in uv_corners)
+
+
+def _style_key(collected) -> tuple:
+    """几何样式 key。不含贴图路径和方块名。"""
+    if collected[0] == "fluid":
+        return (_MESH_STYLE_VERSION, MODEL_FRAME, "fluid", _q(collected[1]))
+    _, apply_uvlock, faces = collected
+    return (
+        _MESH_STYLE_VERSION,
+        MODEL_FRAME,
+        bool(apply_uvlock),
+        tuple(
+            (face["from"], face["to"], face["rotation"], face["face_name"], _uv_key(face["uv_corners"]), face["slot"])
+            for face in faces
+        ),
+    )
+
+
+def _texture_files_in_slot_order(faces) -> list:
+    """按槽位第一次出现的顺序收集贴图"""
+    files = []
+    seen = set()
+    for face in faces:
+        key = str(face["texture_file"]).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        files.append(face["texture_file"])
+    return files
+
+
+def _materials_for_files(texture_files, destination_path, category="block", *, two_sided=False, reload=False) -> list:
+    """按槽位顺序创建材质；已有贴图沿用现有导入缓存"""
+    texture_package = _mc_texture_path(destination_path, category)
+    material_package = _mc_material_path(destination_path, category)
+    if two_sided:
+        # 双面材质单独存放在 two_sided 子目录，同时保留原材质名以便匹配染色表
+        material_package = _normalize_package_path(material_package + "/two_sided")
+    imported_textures = {}
+    created_materials = {}
+    materials = []
+    for texture_file in texture_files:
+        _, material_asset = _material_context_for_texture(
+            imported_textures,
+            created_materials,
+            texture_file,
+            texture_package,
+            material_package,
+            two_sided=two_sided,
+            reload=reload,
+        )
+        materials.append(material_asset)
+    return materials
+
+
+def _remember_style(style_key, asset_path, saved) -> None:
+    """成功保存后记下该样式的原型路径"""
+    if style_key is not None and saved:
+        _MESH_STYLE_CACHE[style_key] = asset_path
+
+
+def _clone_styled_mesh(style_key, target_path, materials):
+    """复制同一样式的原型网格并换材质。失败时返回 None，由调用方改为新建。"""
+    proto = _MESH_STYLE_CACHE.get(style_key)
+    if not proto or not unreal.EditorAssetLibrary.does_asset_exist(proto):
+        if proto:
+            _MESH_STYLE_CACHE.pop(style_key, None)
+        return None
+    try:
+        mesh = unreal.EditorAssetLibrary.duplicate_asset(proto, target_path)
+    except Exception as exc:
+        warn(f"复制方块网格失败: {proto}", exc)
+        return None
+    if not isinstance(mesh, unreal.StaticMesh):
+        return None
+    for index, material in enumerate(materials):
+        mesh.set_material(index, material)
+    unreal.EditorAssetLibrary.set_metadata_tag(mesh, 'MineprepModelFrame', MODEL_FRAME)
+    unreal.EditorAssetLibrary.save_loaded_asset(mesh)
+    unreal.log(f"import_block (json): duplicated style from {proto}")
+    return mesh
+
+
+def _append_block_face(mesh, face_name, face_vertices, uv_corners, material_index, apply_uvlock, uvlock_tris_by_alpha):
+    """写入一个面，并在需要时记下 uvlock 三角形"""
+    triangle_ids = _append_quad_with_uvs(mesh, face_vertices, uv_corners, material_index)
+    if apply_uvlock:
+        alpha = UVLOCK_FACE_AXIS_ALPHA.get(face_name)
+        if alpha is not None:
+            uvlock_tris_by_alpha[alpha].extend(triangle_ids)
+
+
+def _finish_uvlock(mesh, uvlock_tris_by_alpha):
+    """有轴向标记时写入顶点色"""
+    if any(uvlock_tris_by_alpha.values()):
+        _apply_uvlock_vertex_colors(mesh, uvlock_tris_by_alpha)
+
+
+def _fluid_dynamic_mesh(height_ratio):
+    """按高度构建流体 DynamicMesh。水平面用槽 0，侧面用槽 1。"""
+    bounds_from = [0.0, 0.0, 0.0]
+    bounds_to = [16.0, 16.0 * height_ratio, 16.0]
+    full_face_uv = [0.0, 0.0, 16.0, 16.0]
+    target_mesh = _new_dynamic_mesh()
+    uvlock_tris_by_alpha = {0.94: [], 0.96: [], 0.98: []}
+    corners = _build_element_corners(bounds_from, bounds_to, None)
+    for face_name in FACE_NAMES:
+        material_index = 0 if face_name in FLUID_HORIZONTAL_FACES else 1
+        use_down_winding = face_name == "down"
+        face_indices = list(FACE_CORNER_INDICES[face_name])
+        if use_down_winding:
+            face_indices.reverse()
+        face_vertices = [corners[index] for index in face_indices]
+        uv_corners = _compute_face_uv_corners(
+            face_name,
+            full_face_uv,
+            bounds_from,
+            bounds_to,
+            0,
+            use_down_winding=use_down_winding,
+        )
+        _append_block_face(target_mesh, face_name, face_vertices, uv_corners, material_index, True, uvlock_tris_by_alpha)
+    _finish_uvlock(target_mesh, uvlock_tris_by_alpha)
+    return target_mesh
+
+
+def _dynamic_mesh_from_faces(apply_uvlock, faces):
+    """由已收集的面构建 DynamicMesh"""
+    target_mesh = _new_dynamic_mesh()
+    uvlock_tris_by_alpha = {0.94: [], 0.96: [], 0.98: []}
+    for face in faces:
+        _append_block_face(
+            target_mesh,
+            face["face_name"],
+            face["vertices"],
+            face["uv_corners"],
+            face["slot"],
+            apply_uvlock,
+            uvlock_tris_by_alpha,
+        )
+    _finish_uvlock(target_mesh, uvlock_tris_by_alpha)
+    return target_mesh
+
+
+def _collect_fluid(model_path, model_data, block_name, fluid_level):
+    """解析流体贴图与高度。返回 ('fluid', height, still, flow) 或 None。"""
     still_texture_source = _resolve_fluid_texture_path(model_path, model_data, block_name, flow=False)
     if still_texture_source is None or not still_texture_source.exists():
         warn(f"导入流体方块失败: {model_path} (找不到静止流体贴图)")
@@ -1353,102 +1679,34 @@ def _build_fluid_dynamic_mesh(model_path, destination_path, asset_name, fluid_le
         warn(f"导入流体方块失败: {model_path} (找不到流动流体贴图)")
         return None
 
-    height_ratio = _fluid_height_ratio(fluid_level)
-    bounds_from = [0.0, 0.0, 0.0]
-    bounds_to = [16.0, 16.0 * height_ratio, 16.0]
-    full_face_uv = [0.0, 0.0, 16.0, 16.0]
-
-    category = "block"
-    texture_package = _mc_texture_path(destination_path, category)
-    material_package = _mc_material_path(destination_path, category)
-    imported_textures = {}
-    created_materials = {}
-
-    _, still_material = _material_context_for_texture(
-        imported_textures,
-        created_materials,
-        still_texture_source,
-        texture_package,
-        material_package,
-    )
-    _, flow_material = _material_context_for_texture(
-        imported_textures,
-        created_materials,
-        flow_texture_source,
-        texture_package,
-        material_package,
-    )
-
-    target_mesh = _new_dynamic_mesh()
-    corners = _build_element_corners(bounds_from, bounds_to, None)
-    for face_name in FACE_NAMES:
-        material_index = 0 if face_name in FLUID_HORIZONTAL_FACES else 1
-        use_down_winding = face_name == "down"
-        face_indices = list(FACE_CORNER_INDICES[face_name])
-        if use_down_winding:
-            face_indices.reverse()
-
-        face_vertices = [corners[index] for index in face_indices]
-        uv_corners = _compute_face_uv_corners(
-            face_name,
-            full_face_uv,
-            bounds_from,
-            bounds_to,
-            0,
-            use_down_winding=use_down_winding,
-        )
-        _append_quad_with_uvs(target_mesh, face_vertices, uv_corners, material_index)
-
-    return category, target_mesh, [still_material, flow_material]
+    return ("fluid", _fluid_height_ratio(fluid_level), still_texture_source, flow_texture_source)
 
 
-def _build_block_dynamic_mesh(model_path, destination_path, asset_name, fluid_level=0):
-    """由 JSON 模型构建方块 DynamicMesh"""
-    model_data = _load_mc_model(model_path)
+def _collect_block_model(model_path, model_data, asset_name, fluid_level=0):
+    """收集可渲染面，供样式 key 和网格构建共用。
+
+    返回 ('item', texture) | ('fluid', height, still, flow) | ('block', uvlock, faces) | None。
+    """
     elements = model_data.get("elements") or []
     textures = model_data.get("textures") or {}
-
     category = "item" if model_data.get("parent") in {"item/generated", "builtin/generated"} else "block"
 
     if not elements and category == "item" and "layer0" in textures:
-        item_texture = _resolve_texture_reference(model_path, textures, "layer0")
-        return "item", item_texture
+        return ("item", _resolve_texture_reference(model_path, textures, "layer0"))
 
     if not elements:
         block_name = str(asset_name or model_path.stem).lower().replace("minecraft:", "")
         if _is_fluid_block_name(block_name):
-            return _build_fluid_dynamic_mesh(model_path, destination_path, block_name, fluid_level)
+            return _collect_fluid(model_path, model_data, block_name, fluid_level)
         warn(f"导入方块失败: {model_path} (无可渲染元素)")
         return None
 
-    texture_package = _mc_texture_path(destination_path, category)
-    material_package = _mc_material_path(destination_path, category)
-
-    target_mesh = _new_dynamic_mesh()
-    imported_textures = {}
-    created_materials = {}
-    material_slots = []
-    material_slot_index_by_texture = {}
     model_stem = asset_name or model_path.stem
     apply_uvlock = (not _is_leaves_model(model_stem)) and (
         _model_uses_uvlock(model_stem) or _model_data_is_full_cube(model_data)
     )
-    # Alpha → 三角形列表；默认未写入面保持 Alpha=1
-    uvlock_tris_by_alpha = {0.94: [], 0.96: [], 0.98: []}
-
-    def get_material_index(texture_file):
-        texture_asset, material_asset = _material_context_for_texture(
-            imported_textures,
-            created_materials,
-            texture_file,
-            texture_package,
-            material_package,
-        )
-        texture_key = str(texture_file).lower()
-        if texture_key not in material_slot_index_by_texture:
-            material_slot_index_by_texture[texture_key] = len(material_slots)
-            material_slots.append(material_asset)
-        return material_slot_index_by_texture[texture_key], texture_asset, material_asset
+    slot_of = {}
+    faces = []
 
     for element in elements:
         bounds_from = element.get("from")
@@ -1457,10 +1715,13 @@ def _build_block_dynamic_mesh(model_path, destination_path, asset_name, fluid_le
             continue
 
         corners = _build_element_corners(bounds_from, bounds_to, element.get("rotation"))
-        faces = element.get("faces") or {}
+        element_faces = element.get("faces") or {}
+        from_key = _quant3(bounds_from)
+        to_key = _quant3(bounds_to)
+        rotation_key = _rotation_key(element.get("rotation"))
 
         for face_name in FACE_NAMES:
-            face_data = faces.get(face_name)
+            face_data = element_faces.get(face_name)
             if not face_data:
                 continue
 
@@ -1476,36 +1737,46 @@ def _build_block_dynamic_mesh(model_path, destination_path, asset_name, fluid_le
             else:
                 texture_file = _resolve_texture_reference(model_path, {"direct": texture_ref}, "direct")
 
-            material_index, _, _ = get_material_index(texture_file)
+            texture_key = str(texture_file).lower()
+            if texture_key not in slot_of:
+                slot_of[texture_key] = len(slot_of)
+
             use_down_winding = face_name == "down"
             face_indices = list(FACE_CORNER_INDICES[face_name])
             if use_down_winding:
                 face_indices.reverse()
 
-            face_vertices = [corners[index] for index in face_indices]
-            uv_corners = _compute_face_uv_corners(
-                face_name,
-                face_data.get("uv"),
-                bounds_from,
-                bounds_to,
-                face_data.get("rotation", 0),
-                use_down_winding=use_down_winding,
-            )
-            triangle_ids = _append_quad_with_uvs(target_mesh, face_vertices, uv_corners, material_index)
-            if apply_uvlock:
-                alpha = UVLOCK_FACE_AXIS_ALPHA.get(face_name)
-                if alpha is not None:
-                    uvlock_tris_by_alpha[alpha].extend(triangle_ids)
+            faces.append({
+                "from": from_key,
+                "to": to_key,
+                "rotation": rotation_key,
+                "face_name": face_name,
+                "cullface": face_data.get("cullface"),
+                "vertices": [corners[index] for index in face_indices],
+                "uv_corners": _compute_face_uv_corners(
+                    face_name,
+                    face_data.get("uv"),
+                    bounds_from,
+                    bounds_to,
+                    face_data.get("rotation", 0),
+                    use_down_winding=use_down_winding,
+                ),
+                "slot": slot_of[texture_key],
+                "texture_file": texture_file,
+            })
 
-    if not material_slots:
-        _return_dynamic_mesh(target_mesh)
+    if not faces:
         warn(f"导入方块失败: {model_path} (未产生材质)")
         return None
+    return ("block", apply_uvlock, faces)
 
-    if any(uvlock_tris_by_alpha.values()):
-        _apply_uvlock_vertex_colors(target_mesh, uvlock_tris_by_alpha)
 
-    return category, target_mesh, material_slots
+def _dynamic_mesh_from_collected(collected):
+    """由收集结果构建 DynamicMesh。物品不在此处理。"""
+    if collected[0] == "fluid":
+        return _fluid_dynamic_mesh(collected[1])
+    _, apply_uvlock, faces = collected
+    return _dynamic_mesh_from_faces(apply_uvlock, faces)
 
 
 def _first_static_mesh(imported_assets) -> unreal.StaticMesh:
@@ -1513,14 +1784,15 @@ def _first_static_mesh(imported_assets) -> unreal.StaticMesh:
     return next((asset for asset in imported_assets if isinstance(asset, unreal.StaticMesh)), None)
 
 def _generate_collision(mesh, count=4, verts=16, precision=100000):
-    """为 StaticMesh 生成凸包碰撞"""
+    """为 StaticMesh 生成凸包碰撞，完成后保存，使碰撞写入资产"""
     mesh_subsystem = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     mesh_subsystem.set_convex_decomposition_collisions(
-        mesh, 
-        hull_count=count, 
-        max_hull_verts=verts, 
-        hull_precision=precision
+        mesh,
+        hull_count=count,
+        max_hull_verts=verts,
+        hull_precision=precision,
     )
+    return unreal.EditorAssetLibrary.save_loaded_asset(mesh)
     
 
 def import_item(
@@ -1531,15 +1803,15 @@ def import_item(
     thickness=6.25,
     alpha_threshold=0.5,
     max_resolution=32,  # 默认上限设为 32x32
-    reload=False,       # 新增：是否重新导入
+    reload=False,       # 是否重新导入
 ) -> unreal.StaticMesh:
-    """从贴图导入物品网格；已存在且 reload=False 时直接复用"""
-    source = _normalize_source_file(filepath)
+    """从贴图路径或默认包中的物品名称导入挤出网格；reload=False 时复用已有资产。"""
+    source, source_name, destination_path = _resolve_import_source(filepath, "item", destination_path)
     if source.suffix.lower() not in IMAGE_SUFFIXES:
         raise ValueError(f"import_item only supports image files: {source}")
 
     item_root = _mc_root_path(destination_path, "item")
-    base_name = _sanitize_asset_name(asset_name or source.stem)
+    base_name = _sanitize_asset_name(asset_name or source_name)
     
     # 提前计算目标静态网格体资产路径并检查
     target_mesh_path = _asset_path(item_root, _mc_mesh_asset_name(base_name))
@@ -1551,10 +1823,10 @@ def import_item(
 
     texture_package = _mc_texture_path(destination_path, "item")
     material_package = _mc_material_path(destination_path, "item")
-    texture_name = _sanitize_asset_name(source.stem)
+    texture_name = _sanitize_asset_name(source_name)
 
     texture_asset = _import_texture_asset(source, texture_package, texture_name)
-    material_asset = _create_texture_material(texture_asset, material_package, texture_name)
+    material_asset = _create_texture_material(texture_asset, material_package, texture_name, texture_source=source, reload=reload)
 
     dynamic_mesh = None
     try:
@@ -1588,10 +1860,10 @@ def import_block(
     reload=False,
     fluid_level=0,
 ) -> unreal.StaticMesh:
-    """从 JSON 模型或贴图导入方块网格；支持流体高度 fluid_level"""
-    source = _normalize_source_file(filepath)
+    """从模型路径或默认包中的模型名称导入方块网格；支持流体高度 fluid_level。"""
+    source, source_name, destination_path = _resolve_import_source(filepath, "block", destination_path)
     suffix = source.suffix.lower()
-    base_name = _sanitize_asset_name(asset_name or source.stem)
+    base_name = _sanitize_asset_name(asset_name or source_name)
 
     if suffix == ".json":
         try:
@@ -1612,32 +1884,46 @@ def import_block(
             if not reload:
                 existing_mesh = _load_asset_if_exists(target_mesh_path, unreal.StaticMesh)
                 if existing_mesh:
+                    if category == 'block' and unreal.EditorAssetLibrary.get_metadata_tag(
+                            existing_mesh, 'MineprepModelFrame') != MODEL_FRAME:
+                        raise ValueError(f'{target_mesh_path}: expected {MODEL_FRAME}; clear the old mesh or re-import with reload=True')
                     unreal.log(f"import_block (json): Asset already exists, skipping: {target_mesh_path}")
                     return existing_mesh
 
-            built = _build_block_dynamic_mesh(source, destination_path, base_name, fluid_level)
-            if built is None:
+            collected = _collect_block_model(source, model_data, base_name, fluid_level)
+            if collected is None:
                 return None
 
-            if built[0] == "item" and len(built) == 2:
+            if collected[0] == "item":
                 return import_item(
-                    built[1],
+                    collected[1],
                     destination_path=destination_path,
                     asset_name=base_name,
                     max_resolution=max_resolution,
                     reload=reload,
                 )
 
-            category, dynamic_mesh, materials = built
-            model_root = _mc_root_path(destination_path, category)
+            style_key = _style_key(collected)
+            if collected[0] == "fluid":
+                texture_files = [collected[2], collected[3]]
+            else:
+                texture_files = _texture_files_in_slot_order(collected[2])
+            materials = _materials_for_files(texture_files, destination_path, reload=reload)
 
+            if not reload:
+                cloned = _clone_styled_mesh(style_key, target_mesh_path, materials)
+                if cloned is not None:
+                    return cloned
+
+            dynamic_mesh = _dynamic_mesh_from_collected(collected)
             try:
                 mesh_asset = _create_static_mesh_asset(
                     dynamic_mesh,
-                    _asset_path(model_root, _mc_mesh_asset_name(base_name)),
+                    target_mesh_path,
                     materials,
                 )
-                _generate_collision(mesh_asset)
+                unreal.EditorAssetLibrary.set_metadata_tag(mesh_asset, 'MineprepModelFrame', MODEL_FRAME)
+                _remember_style(style_key, target_mesh_path, _generate_collision(mesh_asset))
                 unreal.log(f"import_block created from json: {mesh_asset.get_path_name()}")
                 return mesh_asset
             finally:

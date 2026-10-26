@@ -1,16 +1,13 @@
-"""Dockable Mineprep browser. All Unreal calls stay on the Slate thread."""
+"""MC 原版生物加载器面板界面。"""
 import time
-import weakref
-from concurrent.futures import wait, FIRST_COMPLETED
 from functools import partial
 
 import unreal
 import mineprep
 from .assets import AssetStore, load_settings, save_settings
 from .props import LoaderOptions
-from . import composition
+from . import composition, api
 
-_instances = weakref.WeakSet()
 CATEGORIES = {'ALL': ('全部', 'All'), 'Regular': ('常规', 'Regular'),
               'Babies': ('幼体', 'Babies'), 'Custom': ('自定义', 'Custom'),
               'Legacy': ('历史版本', 'Legacy'), 'Unsupported': ('未支持', 'Unsupported')}
@@ -28,11 +25,6 @@ def picture(parent, size):
     node = parent.image(size=size, color=unreal.LinearColor(1, 1, 1, 0), padding=1, align=(2, 2))
     node.hide(unreal.SlateVisibility.SELF_HIT_TEST_INVISIBLE)
     return node
-
-
-def close_all():
-    for instance in list(_instances):
-        instance.destruct()
 
 
 class VanillaMobLoader(mineprep.Mod):
@@ -60,6 +52,8 @@ class VanillaMobLoader(mineprep.Mod):
         self.textures = {}
         self.attempted = set()
         self.refreshing = False
+        self._build_job = None
+        self._refresh_job = None
         self.closed = False
         self.tick_handle = None
         self._search_due = 0
@@ -79,7 +73,6 @@ class VanillaMobLoader(mineprep.Mod):
         self._badges = {}
         self._highlighted = {}
         self._visible_keys = set()
-        _instances.add(self)
 
         try:
             super().__init__(context)
@@ -282,7 +275,7 @@ class VanillaMobLoader(mineprep.Mod):
         self._highlighted = active
 
     def _create_detail_widgets(self):
-        # One widget tree per panel, reused across every selection and refresh.
+        # 右栏详情控件只创建一次，切换选中项与刷新时直接复用
         self._detail_empty = self.details.text(tr('选择模板查看详情', 'Select a template to view details'), size=13, wrap=True)
         self._detail_body = self.details.col()
         self._detail_image = picture(self._detail_body, 170)
@@ -303,7 +296,7 @@ class VanillaMobLoader(mineprep.Mod):
         self._detail_empty.hide(bool(entry))
         self._detail_body.hide(not entry)
         self._detail_info.hide(not self.options.ShowDetails)
-        # Clear the old brush even if the new entry's thumbnail is unavailable.
+        # 切换条目时先清空旧预览图，防止新条目无缩略图时残留旧图像
         tex = self.textures.get(entry.id) if entry else None
         self._detail_image.set_brush_resource_object(tex)
         self._detail_image.set_color_and_opacity(unreal.LinearColor(1, 1, 1, 0))
@@ -316,7 +309,7 @@ class VanillaMobLoader(mineprep.Mod):
         values = {
             'id': entry.id,
             'category': label(entry.category),
-            'textures': tr('仅使用主皮肤；额外贴图暂未应用', 'Primary skin only; additional textures are not applied')
+            'textures': tr('仅应用主皮肤，附加贴图暂不加载', 'Primary skin only; additional textures are not loaded')
                         if self.catalog.texture_count(entry) > 1 else '',
             'parent': tr('父模板：' + entry.parent_name, 'Parent: ' + entry.parent_name) if entry.parent_name else '',
             'description': entry.description,
@@ -349,95 +342,91 @@ class VanillaMobLoader(mineprep.Mod):
         if self.refreshing or self.closed or not self.selected or not self.catalog:
             return
 
-        from . import importer, skeletal
+        from . import importer
         self.refreshing = True
         self.refresh_button.set_is_enabled(False)
         self.load_button.set_is_enabled(False)
         self.reload_button.set_is_enabled(False)
-        self.store.close()
-        self.store = AssetStore()
-
         try:
             entries = self.selected_entries()
             folder, name = composition.destination(self.options.SavePath, self.options.SaveName)
             self.options.SaveName = name
             self._save()
-            entry = composition.aggregate_entry(entries, name, self.options.LayerExpansion, self.options.RandomScale)
             placement = None if reload else importer.placement_target()
-            target = importer.composition_target(entry, folder, name, reload)
-            mesh = target[2]
-            warnings = []
-            if mesh is None or reload:
-                skeletal.prerequisites()
-                models = [self.catalog.model_data(e) for e in entries]
-                skins = [None]*len(entries)
-                with unreal.ScopedSlowTask(len(entries)+2, tr('正在加载模型', 'Loading model')) as progress:
-                    progress.make_dialog(False)
-                    futures = {self.store.submit(self.store.skin,e.id): i for i,e in enumerate(entries) if not e.textureless}
-                    for i,result in self._wait_batch(futures,progress):
-                        try:
-                            skins[i] = result.result()
-                        except Exception as exc:
-                            warnings.append(entries[i].name+': '+str(tr('皮肤不可用', 'Skin unavailable'))+' '+str(exc)[:80])
-                    future = self.store.submit(composition.combine, entries, models, skins,
-                                               self.options.LayerExpansion, self.options.RandomScale)
-                    for _,result in self._wait_batch({future:None},progress):
-                        geo, conflicts = result.result()
-                    if conflicts:
-                        mineprep.panic(tr('组合骨骼冲突', 'Conflicting bones'),
-                                       str(tr('继续运行将使用主模型的骨骼，忽略后续多选模型的冲突骨骼。',
-                                          'Continue to keep the first selected bone definitions and ignore later conflicting bones.'))
-                                       + '\n' + '\n'.join(conflicts))
-                    from dataclasses import replace
-                    from types import SimpleNamespace
-                    sources = []
-                    reserved = set()
-                    for slot in geo.materials:
-                        e = entries[slot['source']]
-                        digest = slot['digest']
-                        single = len(entries) == 1
-                        owner = e if single else replace(e, key='skin:'+digest)
-                        material_name = importer.skin_name(owner, target[0], composition.clean_name(e.id), reserved)
-                        reserved.add(material_name.casefold())
-                        path = self.store.skin_path(e.id) if not e.textureless else None
-                        sources.append((owner, material_name, path, SimpleNamespace(single_sided=slot['single_sided'])))
-                    mesh, build_warnings = skeletal.create_assets(entry, self.catalog.version, target, geo,
-                                                                  reload=reload, material_sources=sources)
-                    warnings += build_warnings
-                    progress.enter_progress_frame(1)
-                if any(self.catalog.texture_count(e)>1 for e in entries):
-                    warnings.append(str(tr('每个模板仅使用主皮肤', 'Primary skin only for each template')))
-                if self.store.unsaved:
-                    warnings.append(str(tr('部分缓存未保存', 'Some cache was not saved')))
+            scale = self.options.ModelScale
 
-            if not reload:
-                importer.place(mesh, self.options.ModelScale, placement)
-            self._status = str(tr('已更新：', 'Updated: ') if reload else tr('已放置：', 'Placed: ')) + entry.name
-            if warnings:
-                self._status += ' · ' + '; '.join(warnings)
+            def progress(text):
+                if not self.closed:
+                    self._status = text
+                    self._update_status()
+
+            def conflict(conflicts):
+                mineprep.panic(tr('组合骨骼冲突', 'Conflicting bones'),
+                               str(tr('继续运行将使用主模型的骨骼，忽略后续多选模型的冲突骨骼。',
+                                      'Continue to keep the first selected bone definitions and ignore later conflicting bones.'))
+                               + '\n' + '\n'.join(conflicts))
+                return True
+
+            def stalled():
+                mineprep.panic(tr('资源下载停滞', 'Download stalled'),
+                               tr('连续 10 秒没有资源下载完成。可继续等待，或停止本次刷新。',
+                                  'No resource completed for 10 seconds. Continue waiting or stop this refresh.'))
+                return True
+
+            def finished(job):
+                try:
+                    if self.closed:
+                        return
+                    if job.state == 'failed':
+                        raise RuntimeError(job.error)
+                    if job.state == 'cancelled':
+                        self._status = str(tr('已取消', 'Cancelled'))
+                        return
+                    result = job.result
+                    if not reload:
+                        importer.place(result['mesh'], scale, placement)
+                    self._status = str(tr('已更新：', 'Updated: ') if reload else tr('已放置：', 'Placed: ')) + result['name']
+                    if result['warnings']:
+                        self._status += ' · ' + '; '.join(result['warnings'])
+                except Exception as exc:
+                    self._status = str(tr('加载失败：', 'Import failed: ')) + str(exc)[:220]
+                    mineprep.warn('VanillaMobLoader', exc)
+                finally:
+                    self._finish_build()
+
+            self._build_job = api.build_entity(self.catalog, [e.key for e in entries],
+                save_path=self.options.SavePath, name=name, layer_expansion=self.options.LayerExpansion,
+                random_scale=self.options.RandomScale, reload=reload, cache=self.store.cache, on_progress=progress,
+                on_conflict=conflict, on_stall=stalled, on_done=finished)
         except Exception as exc:
             self._status = str(tr('加载失败：', 'Import failed: ')) + str(exc)[:220]
             mineprep.warn('VanillaMobLoader', exc)
-        finally:
-            self.store.close()
-            self.refreshing = False
+            self._finish_build()
+
+    def _finish_build(self):
+        self._build_job = None
+        self.refreshing = False
+        if not self.closed:
             self.refresh_button.set_is_enabled(True)
             self.load_button.set_is_enabled(bool(self.selected))
             self.reload_button.set_is_enabled(bool(self.selected))
             self._update_status()
 
-    def _wait_batch(self, futures, progress):
-        pending = set(futures)
+    def _wait_batch(self, futures):
+        pending = dict(futures)
+        last = time.monotonic()
         while pending:
-            done, pending = wait(pending, timeout=10, return_when=FIRST_COMPLETED)
-            if not done:
-                mineprep.panic(tr('资源下载停滞', 'Download stalled'),
-                               tr('连续 10 秒没有资源下载完成。可继续等待，或停止本次刷新。',
-                                  'No resource completed for 10 seconds. Continue waiting or stop this refresh.'))
-            for future in done:
+            future = next((f for f in pending if f.done()), None)
+            if future is not None:
                 self.store.futures.discard(future)
-                progress.enter_progress_frame(1)
-                yield futures[future], future
+                last = time.monotonic()
+                yield pending.pop(future), future
+            else:
+                if time.monotonic() - last >= 10:
+                    self._status = str(tr('资源下载较慢，正在继续等待…', 'Download is slow; still waiting…'))
+                    self._update_status()
+                    last = time.monotonic()
+                yield None
 
     def refresh(self):
         if self.refreshing or self.closed:
@@ -449,12 +438,22 @@ class VanillaMobLoader(mineprep.Mod):
         self.attempted.clear()
         self._missing = 0
         self.refresh_button.set_is_enabled(False)
+        self.load_button.set_is_enabled(False)
+        self.reload_button.set_is_enabled(False)
+        self._status = str(tr('正在下载模板目录', 'Downloading catalog'))
+        self._update_status()
+        self._refresh_job = self._refresh_assets()
 
+    @mineprep.asynctask
+    def _refresh_assets(self):
         try:
-            with unreal.ScopedSlowTask(1, tr('正在下载模板目录', 'Downloading catalog')) as progress:
-                progress.make_dialog(False)
-                future = self.store.submit(self.store.refresh_catalog)
-                for _, result in self._wait_batch({future: None}, progress):
+            yield
+            future = self.store.submit(self.store.refresh_catalog)
+            for event in self._wait_batch({future: None}):
+                if event is None:
+                    yield
+                else:
+                    _, result = event
                     data, saved = result.result()
 
             self.catalog = data
@@ -463,12 +462,15 @@ class VanillaMobLoader(mineprep.Mod):
                 self.category = data.categories[0]
             self._build_categories()
             self._build_grid(rebuild=True)
+            yield
 
             ids = list(dict.fromkeys(e.id for e in data.entries))
-            with unreal.ScopedSlowTask(len(ids), tr('正在读取缓存并补齐缩略图', 'Loading cached thumbnails and downloading missing ones')) as progress:
-                progress.make_dialog(False)
-                futures = {self.store.submit(self.store.thumbnail, ident): ident for ident in ids}
-                for ident, result in self._wait_batch(futures, progress):
+            self._status = str(tr('正在读取缓存并补齐缩略图', 'Loading cached thumbnails and downloading missing ones')) + f' · 0/{len(ids)}'
+            self._update_status()
+            futures = {self.store.submit(self.store.thumbnail, ident): ident for ident in ids}
+            for event in self._wait_batch(futures):
+                if event is not None:
+                    ident, result = event
                     try:
                         raw = result.result()
                     except Exception:
@@ -476,6 +478,9 @@ class VanillaMobLoader(mineprep.Mod):
                     if not self._apply_png(ident, raw or self.store.cached_png(ident)) and ident not in self.textures:
                         self._missing += 1
                     self.attempted.add(ident)
+                    self._status = str(tr('正在读取缓存并补齐缩略图', 'Loading cached thumbnails and downloading missing ones')) + f' · {len(self.attempted)}/{len(ids)}'
+                    self._update_status()
+                yield  # 每帧最多导入一张缩略图，下载等待期间也让出主线程。
 
             self._status = str(tr('全部资源刷新完成', 'Asset refresh complete') if saved and not self.store.unsaved else
                                tr('刷新完成，但部分缓存未保存', 'Refresh complete; some cache was not saved'))
@@ -484,11 +489,13 @@ class VanillaMobLoader(mineprep.Mod):
             mineprep.warn('VanillaMobLoader', exc)
         finally:
             self.store.close()
+            self._refresh_job = None
             self.refreshing = False
-            self.refresh_button.set_is_enabled(True)
-            self.load_button.set_is_enabled(bool(self.selected))
-            self.reload_button.set_is_enabled(bool(self.selected))
-            self._update_status()
+            if not self.closed:
+                self.refresh_button.set_is_enabled(True)
+                self.load_button.set_is_enabled(bool(self.selected))
+                self.reload_button.set_is_enabled(bool(self.selected))
+                self._update_status()
 
     def _update_status(self):
         messages = [self._status] if self._status else []
@@ -527,7 +534,7 @@ class VanillaMobLoader(mineprep.Mod):
         image.set_desired_size_override(unreal.Vector2D(width * scale, height * scale))
 
     def _images_tick(self):
-        # Prioritize selection and the approximate visible rows, then progress forward.
+        # 优先加载当前选中项与滚动视口附近的缩略图
         columns = max(1, int(max(124, self._size[0] - 460) / 130))
         start = max(0, int(self.grid_scroll.get_scroll_offset() / 156) * columns - columns)
         candidates = self.rows[start:start + columns * 8]
@@ -549,7 +556,7 @@ class VanillaMobLoader(mineprep.Mod):
         self._update_status()
 
     def _tick(self, delta):
-        if self.closed or self.refreshing:
+        if self.closed:
             return
         self._elapsed += delta
         if self._elapsed < 0.1:
@@ -564,6 +571,8 @@ class VanillaMobLoader(mineprep.Mod):
                 self.frame.set_width_override(desired[0])
                 self.frame.set_height_override(desired[1])
 
+            if self.refreshing:
+                return
             if self._search_due and time.monotonic() >= self._search_due:
                 self._search_due = 0
                 self._build_grid()
@@ -576,9 +585,14 @@ class VanillaMobLoader(mineprep.Mod):
         if self.closed:
             return
         self.closed = True
+        if self._refresh_job is not None:
+            self._refresh_job.destroy()
+            self._refresh_job = None
+        if self._build_job is not None:
+            self._build_job.cancel()
+            self._build_job = None
         if self.tick_handle is not None:
             unreal.unregister_slate_post_tick_callback(self.tick_handle)
             self.tick_handle = None
         self.store.close()
         self.textures.clear()
-        _instances.discard(self)

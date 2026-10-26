@@ -1,16 +1,16 @@
-"""Vanilla Mob Loader: browse Ewan Howell's CEM template catalog in Mineprep.
+"""MC 原版生物加载器：浏览、构建并放置 Blockbench CEM Template Loader 生物模型。
 
-Upstream data: https://wynem.com/assets/json/cem_template_models.json
-Reference UI: https://github.com/ewanhowell5195/blockbenchPlugins/tree/main/cem_template_loader
-Creates skeletal entity meshes; retains static mesh construction; does not execute CEM animation expressions.
+上游模型目录：https://wynem.com/assets/json/cem_template_models.json
+参考插件：https://github.com/ewanhowell5195/blockbenchPlugins/tree/main/cem_template_loader
 """
 import mineprep
 
 mod_info = {
     'Name': mineprep.bilingual('MC原版生物加载器', 'Vanilla Mob Loader'),
     'Description': mineprep.bilingual('浏览、导入并放置MC生物模型', 'Browse, import and place skeletal MC entities'),
-    'Version': '1.0',
+    'Version': '2.0',
     'CreatedBy': 'Pig',
+    'Credits': '[CEM Template Loader](https://ewanhowell.com/plugins/cem-template-loader/)',
     'EnabledByDefault': True,
     'ReloadWithMineprep': True,
     'Priority': 1,
@@ -23,10 +23,6 @@ def register():
 
 
 def unregister():
-    import unreal
-    from . import panel
-    panel.close_all()
-    # UE prefixes the requested unique ID with the widget blueprint object path.
-    tab_id = '/Game/mc/mods/VanillaMobLoader.VanillaMobLoaderVanillaMobLoader'
-    unreal.get_editor_subsystem(unreal.EditorUtilitySubsystem).unregister_tab_by_id(tab_id)
+    from . import panel, api
+    api.cancel_all()
     panel.VanillaMobLoader.unregister()

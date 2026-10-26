@@ -1,4 +1,4 @@
-"""RT sketchpad: load a Texture2D, paint, save."""
+"""基于 RenderTarget2D 的像素画板：加载贴图、笔触绘制、预览与保存导出。"""
 import math
 import os
 import unreal
@@ -87,7 +87,7 @@ def force_update(tex):
 
 
 def srgb_to_linear(c):
-    """read_render_target_pixel returns sRGB FColor; the Color picker stores LinearColor."""
+    """read_render_target_pixel 返回 sRGB FColor，转换为拾色器使用的 LinearColor。"""
     linear = unreal.LinearColor()
     linear.set_from_srgb(c)
     return linear
@@ -261,23 +261,30 @@ class Pad:
     def down(self, w):
         self.begin_stroke(self.pos(w))
         self.update_hint(w)
-        return True
+        return unreal.WidgetLibrary.capture_mouse(
+            unreal.WidgetLibrary.handled(), w.target)
 
     def move(self, w):
+        uv = w.get_mouse_uv()
+        inside = 0 <= uv.x < 1 and 0 <= uv.y < 1
+        if not inside:
+            self.last = None  # 鼠标移出画布时断开笔触连线
+            return self.drawing
+
         if self.drawing:
             p = self.pos(w)
-            self.stamp_segment(self.last, p)
+            self.stamp_segment(self.last if self.last is not None else p, p)
             self.last = p
             if not self.replace:
                 self.composite()
-            self.update_hint(w)
-            return True
         self.update_hint(w)
-        return False
+        return self.drawing
 
     def up(self, w):
         self.drawing = False
-        return True
+        self.last = None
+        return unreal.WidgetLibrary.release_mouse_capture(
+            unreal.WidgetLibrary.handled())
 
     def bind_hover(self, hover):
         self.hover = hover

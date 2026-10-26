@@ -1,8 +1,12 @@
 import json
 import inspect
-import unreal
+try:
+    import unreal
+except ModuleNotFoundError:
+    from mc_utils import Lazy as unreal
 import uuid
 import random
+import weakref
 import mcvars
 from pathlib import Path
 from mc_utils import (construct, uasset, enum, uclass, copy, debug, SafeList,
@@ -98,14 +102,52 @@ def _to_jsonable(value):
     tname = type(value).__name__
     if isinstance(value, (list, set, tuple)) or tname in ('Array', 'FixedArray', 'Set'):
         return [_to_jsonable(v) for v in value]
+    if isinstance(value, dict) or tname == 'Map':
+        return [[_to_jsonable(k), _to_jsonable(v)] for k, v in value.items()]
     if hasattr(value, 'export_text'):
         return value.export_text()
     raise TypeError(tname)
 
 
-def _from_jsonable(group, name, raw, hint=None):
+def _dict_args(expected_type):
+    """dict[K, V] → (K, V)。不是 dict 注解时返回 None。"""
+    if getattr(expected_type, '__origin__', None) is not dict:
+        return None
+    args = getattr(expected_type, '__args__', ()) or ()
+    key_type = args[0] if args else None
+    value_type = args[1] if len(args) > 1 else None
+    return key_type, value_type
+
+
+def _live_is_map(group, name, hint):
+    current = hint
+    if current is None and group is not None:
+        try:
+            current = group._uobj.get_editor_property(name)
+        except Exception:
+            return False
+    return type(current).__name__ == 'Map'
+
+
+def _from_jsonable(group, name, raw, hint=None, *, expected_type=None, live_map=False):
     if raw is None or isinstance(raw, (bool, int, float)):
         return raw
+    # 注解为 str 的键/值保持文本。不能把 /Game/... 交给 load_asset。
+    if expected_type is str and isinstance(raw, str):
+        return raw
+    dict_args = _dict_args(expected_type)
+    if dict_args is None and live_map and expected_type is None and _live_is_map(group, name, hint):
+        dict_args = (None, None)
+    if dict_args is not None and isinstance(raw, list):
+        key_type, value_type = dict_args
+        restored = {}
+        for entry in raw:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                raise ValueError(f'{name}: Map entry must be a pair')
+            key, value = entry
+            restored[_from_jsonable(group, name, key, expected_type=key_type)] = _from_jsonable(
+                group, name, value, expected_type=value_type)
+        return restored
     if isinstance(raw, list):
         cur = hint if hint is not None else group._uobj.get_editor_property(name)
         out = []
@@ -149,6 +191,91 @@ def _from_jsonable(group, name, raw, hint=None):
     return raw
 
 
+def _property_sample(value):
+    """将属性值包装为可比较的对象，并返回是否需要拷贝保存快照。"""
+    if isinstance(value, (unreal.StructBase, unreal.Text)):
+        # 部分 UE 结构体未实现 Python 判等，放入单元素 Array 后可借助底层 FProperty::Identical 比较
+        return unreal.Array.cast(type(value), (value,)), False
+    if isinstance(value, (unreal.Array, unreal.FixedArray, unreal.Set, unreal.Map)):
+        return value, True
+    if value is None or isinstance(value, (bool, int, float, str, unreal.Name,
+                                           unreal.EnumBase, unreal.Object)):
+        return value, False
+    raise TypeError(f'unsupported property value: {type(value).__name__}')
+
+
+class _RootPropertyState:
+    """记录 PropertyGroup 各顶层字段的快照，用于在 DetailsView 修改子属性时识别实际发生变化的顶层字段。"""
+    def __init__(self, group):
+        self.names = tuple(type(group)._schema_[3])
+        self.values = {}
+        self.dispatching = False
+        self.sync(group)
+
+    def sync(self, group, names=None):
+        changed, updates = [], {}
+        for name in self.names if names is None else names:
+            try:
+                value, needs_copy = _property_sample(group.uobject.get_editor_property(name))
+                if (name not in self.values or type(value) is not type(self.values[name])
+                        or value != self.values[name]):
+                    changed.append(name)
+                    updates[name] = value.copy() if needs_copy else value
+            except Exception as exc:
+                raise TypeError(f'cannot track property {name}: {exc}') from exc
+        # 所有字段均读取成功后再更新快照，避免中途异常导致状态不一致
+        self.values.update(updates)
+        return changed
+
+
+def _release_property_state(group_ref):
+    group = group_ref()
+    if group is not None and not any(binding.root for binding in group._prop_view_bindings):
+        object.__setattr__(group, '_prop_change_state', None)
+
+
+class _PropertyViewBinding:
+    def __init__(self, group, user, *, root=False, fixed_name=None):
+        self.group, self.user, self.root, self.fixed_name = group, user, root, fixed_name
+        if root and getattr(group, '_prop_change_state', None) is None:
+            state = _RootPropertyState(group)  # 在创建控件前先校验并初始化属性快照
+            object.__setattr__(group, '_prop_change_state', state)
+        bindings = getattr(group, '_prop_view_bindings', None)
+        if bindings is None:
+            bindings = weakref.WeakSet()
+            object.__setattr__(group, '_prop_view_bindings', bindings)
+        bindings.add(self)
+        if root:
+            weakref.finalize(self, _release_property_state, weakref.ref(group))
+
+    def __call__(self, name=None):
+        group = self.group
+        state = getattr(group, '_prop_change_state', None)
+        if state is not None and state.dispatching:
+            return
+        if state is not None:
+            state.dispatching = True
+        try:
+            roots = state.sync(group) if state is not None else ()
+            if getattr(group, '_autosave_', False):
+                group.save()
+            if self.user:
+                if self.root:
+                    for root in roots:
+                        self.user(root)
+                else:
+                    event_name = self.fixed_name
+                    if event_name is None:
+                        event_name = str(name) if name else ''
+                    self.user(event_name)
+        finally:
+            if state is not None:
+                try:
+                    state.sync(group)
+                finally:
+                    state.dispatching = False
+
+
 class PropertyGroup:
     """自定义属性集，需要实例化再引用成员变量"""
     _unique_ = False
@@ -162,6 +289,8 @@ class PropertyGroup:
     _ue_class_name_ = None
     _schema_ = None  # (properties, defaults, metas, ordered)
     _instance_ = None  # _unique_ 单例
+    _prop_change_state = None  # 启用 pass_rootname 时按需创建的属性快照
+    _prop_view_bindings = None  # 活跃属性视图的弱引用集合，不参与持久化
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -337,8 +466,17 @@ class PropertyGroup:
             elif isinstance(value, str):
                 value = unreal.SoftObjectPath(value)
         self._uobj.set_editor_property(name, value)
+        state = getattr(self, '_prop_change_state', None)
+        if state is not None:
+            state.sync(self, (name,))
         if type(self)._autosave_:
             self.save()
+
+    def sync_property_changes(self):
+        """在原地修改数组/结构体或直接写入 uobject 后，同步属性变更快照（不触发回调）。"""
+        state = getattr(self, '_prop_change_state', None)
+        if state is not None:
+            state.sync(self)
 
     def _json_path(self, path=''):
         if path:
@@ -388,9 +526,13 @@ class PropertyGroup:
             if name not in names:
                 continue
             try:
-                self._uobj.set_editor_property(name, _from_jsonable(self, name, raw))
+                expected = type(self).__annotations__.get(name)
+                self._uobj.set_editor_property(name, _from_jsonable(
+                    self, name, raw, expected_type=expected, live_map=True))
             except Exception as exc:
                 debug(f'{cls_name}.{name}: {exc}')
+
+        self.sync_property_changes()
 
     @classmethod
     def localize(cls, source: str, *args, **kwargs):
@@ -427,7 +569,7 @@ def text_slot(align=(0, 1)):
     return (0, align[1]), justification
 
 
-def add_widget(root, widget: T,
+def add_widget(root, widget: T, props: dict=None,
                padding=unreal.Margin(3,1,3,1), align=(0,1), fill=False,
                clip=False, hidden=False, tooltip='', subclass=None) -> T:
     """添加子控件到根控件"""
@@ -435,6 +577,8 @@ def add_widget(root, widget: T,
         widget = subclass
     if not isinstance(widget, unreal.Object):
         widget = construct(uclass(widget), root)
+    if props:
+        widget.set_editor_properties(props)
     slot = root.add_child(widget)
 
     if hasattr(slot, 'set_padding') and not isinstance(root, unreal.ScaleBox):
@@ -482,6 +626,7 @@ def make_combo_text(item, texts=None, outer=None):
     block.set_font(unreal.SlateFontInfo(
         font_object=uasset('/Engine/EditorResources/DefaultEditorFont.DefaultEditorFont'),
         size=10))
+    block.set_clipping(unreal.WidgetClipping.CLIP_TO_BOUNDS)
     return block
 
 
@@ -504,6 +649,9 @@ class Layout():
     """
     target = None
     _public_ = False
+
+    first: 'Layout' = None
+    second: 'Layout' = None
 
     def __str__(self):
         return f"{self.target.get_name() if self.target else 'None'}"
@@ -626,12 +774,26 @@ class Layout():
 
 
     def prop(self, data: unreal.Object | PropertyGroup, property: str=None, text: str=None,
+             categories: list[str]=None, properties: list[str]=None, searching=False,
              on_property_changed: Callable[[str], Any]=None,
+             pass_rootname: bool=False,
              **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
         """添加属性视图；指定 property 为单属性，否则为完整细节面板。
         data 可为 UObject 或已实例化的 PropertyGroup。
+        完整细节面板可指定 categories / properties / searching。
+        pass_rootname=True 时，PropertyGroup 完整视图按值变化回传顶层字段名。
         """
+        if not isinstance(pass_rootname, bool):
+            raise TypeError('pass_rootname must be bool')
         obj = resolve_prop_object(data)
+        is_group = any(base.__name__ == 'PropertyGroup' for base in type(data).__mro__)
+        if pass_rootname and not property and not is_group:
+            raise TypeError('pass_rootname requires a PropertyGroup for a full DetailsView')
+        binding = None
+        if is_group:
+            binding = _PropertyViewBinding(data, on_property_changed,
+                root=bool(pass_rootname and not property and on_property_changed),
+                fixed_name=str(property) if pass_rootname and property else None)
         if property:
             viewer = add_widget(self.target, unreal.SinglePropertyView, **kwargs)
             viewer.set_object(obj)
@@ -640,14 +802,23 @@ class Layout():
                 viewer.set_name_override(text)
         else:
             viewer = add_widget(self.target, unreal.DetailsView, **kwargs)
+            if categories:
+                viewer.set_editor_property('categories_to_show', categories)
+            if properties:
+                viewer.set_editor_property('properties_to_show', properties)
+            if searching:
+                viewer.set_editor_property('allow_filtering', True)
             viewer.set_object(obj)
 
-        if on_property_changed or getattr(data, '_autosave_', False):
+        if binding is not None:
+            # 即使当前视图未开启 pass_rootname，修改后也需同步同一 PropertyGroup 的属性快照
+            viewer.on_property_changed.add_callable(binding)
+        elif on_property_changed or getattr(data, '_autosave_', False):
             pg, user = data, on_property_changed
             viewer.on_property_changed.add_callable(
                 lambda n=None: (
                     pg.save() if getattr(pg, '_autosave_', False) else None,
-                    user(str(n) if n else '') if user else None,
+                    user(str(property) if pass_rootname and property else str(n) if n else '') if user else None,
                 )
             )
         return Layout(viewer, public=self._public_)
@@ -678,9 +849,9 @@ class Layout():
 
 
     def image(self, image=None, color=unreal.LinearColor(1, 1, 1, 1), size=unreal.Vector2D(64, 64),
-              **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
+              padding=(1,1), **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
         """添加图片控件。不传入image为空白；标量 size 在有贴图时按比例，无贴图时为正方形。"""
-        image_widget = add_widget(self.target, unreal.Image, **kwargs)
+        image_widget = add_widget(self.target, unreal.Image, padding=padding, **kwargs)
         tex = uasset(image) if image is not None else None
         if tex:
             image_widget.set_brush_resource_object(tex)
@@ -714,11 +885,33 @@ class Layout():
         return label_row
 
 
+    def scalebox(self, scale: float=None, padding=0,
+                 **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
+        """添加缩放容器，可指定scale为固定缩放比例。若要动态调整scale，需设置默认值"""
+        scalebox = add_widget(self.target, unreal.ScaleBox, padding=padding, **kwargs)
+        if scale is not None:
+            scalebox.set_editor_property('Stretch', unreal.Stretch.USER_SPECIFIED)
+            scalebox.set_editor_property('UserSpecifiedScale', float(scale))
+        return Layout(scalebox, public=self._public_)
+
+
+    def sizebox(self, width=None, height=None,
+                **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
+        """固定宽高的容器；省略的边不覆盖，之后仍可 set_width_override / set_height_override"""
+        box = add_widget(self.target, unreal.SizeBox, **kwargs)
+        if width is not None:
+            box.set_width_override(float(width))
+        if height is not None:
+            box.set_height_override(float(height))
+        return Layout(box, public=self._public_)
+
+
     def button(self, text='', size=14, text_color=(1,1,1,1), text_padding=2,
-               on_clicked: Callable[[], Any]=None,
+               text_scaling=False, on_clicked: Callable[[], Any]=None,
+               on_hovered: Callable[[], Any]=None, on_unhovered: Callable[[], Any]=None,
                subclass: unreal.Button=unreal.EditorUtilityButton,
                **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
-        """添加按钮，可绑定 on_clicked 回调"""
+        """添加按钮，可绑定 on_clicked / on_hovered / on_unhovered 回调"""
         button = add_widget(self.target, unreal.Button, subclass=subclass, **kwargs)
         style = button.get_editor_property('widget_style')
         style.normal.tint_color.specified_color = unreal.LinearColor(0.039546, 0.039546, 0.039546, 0.8)
@@ -731,10 +924,15 @@ class Layout():
 
         if on_clicked:
             button.on_clicked.add_callable(on_clicked)
+        if on_hovered:
+            button.on_hovered.add_callable(on_hovered)
+        if on_unhovered:
+            button.on_unhovered.add_callable(on_unhovered)
         button_widget = Layout(button, public=self._public_)
 
         if text:
-            button_widget.text(text, size=size, align=(2, 1),
+            parent = button_widget.scalebox() if text_scaling else button_widget
+            parent.text(text, size=size, align=2,
                                color=text_color, padding=text_padding)
         return button_widget
 
@@ -802,10 +1000,10 @@ class Layout():
     def textbox(self, text='', hint='',
                 on_text_changed: Callable[[str], Any]=None,
                 on_text_committed: Callable[[str, unreal.TextCommit], Any]=None,
-                subclass: unreal.EditableTextBox=unreal.EditorUtilityEditableTextBox,
+                subclass: unreal.MultiLineEditableTextBox=unreal.EditorUtilityMultiLineEditableTextBox,
                 **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
         """添加文本框，可绑定 on_text_changed / on_text_committed 回调"""
-        box = add_widget(self.target, unreal.EditableTextBox, subclass=subclass, **kwargs)
+        box = add_widget(self.target, unreal.MultiLineEditableTextBox, subclass=subclass, **kwargs)
         if text:
             box.set_text(text)
         if hint:
@@ -845,13 +1043,29 @@ class Layout():
         def bind_generate(fn):
             if fn is make_combo_text:
                 def wrapped(item):
-                    return make_combo_text(str(item), texts=texts, outer=box)
+                    key = str(item)
+                    if key == 'None' and key not in texts and ('' in texts or not keys):
+                        key = ''  # FName('') 会变成 'None'，若选项定义了空字符串键则还原回 ''
+                    return make_combo_text(key, texts=texts, outer=box)
                 return wrapped
             def wrapped(item):
                 return _combo_widget(fn(str(item)))
             return wrapped
 
-        box = add_widget(self.target, unreal.ComboBoxKey, subclass=subclass, **kwargs)
+        widget_class = (subclass if subclass and unreal.MathLibrary.class_is_child_of(
+            uclass(subclass), uclass(unreal.ComboBoxKey)) else unreal.ComboBoxKey)
+        box = construct(uclass(widget_class), self.target)
+
+        # 隐藏右侧黑色下拉箭头，避免遮挡文本
+        style = box.get_editor_property('widget_style')
+        button_style = style.combo_button_style
+        arrow = button_style.down_arrow_image
+        image_size = unreal.DeprecateSlateVector2D()
+        arrow.image_size = image_size
+        button_style.down_arrow_image = arrow
+        button_style.down_arrow_padding = unreal.Margin(0, 0, 0, 0)
+        style.combo_button_style = button_style
+        box.set_editor_property('widget_style', style)
         keys, texts = _combo_options(options)
 
         gen_content = bind_generate(on_generate_content_widget)
@@ -873,6 +1087,8 @@ class Layout():
         node._combo_keys = keys
         node._combo_gen_content = gen_content
         node._combo_gen_item = gen_item
+        # 挂载到父控件时可能立即触发 Slate 构建，需在此之前绑定生成回调并设置初始选中项
+        add_widget(self.target, box, **kwargs)
         if on_selection_changed:
             def on_sel(name, reason):
                 on_selection_changed(str(name), reason)
@@ -899,6 +1115,117 @@ class Layout():
         return self.column(**kwargs)
 
 
+    def splitter(self, ratio=0.5, vertical=False,
+                 limits=(0.1, 0.9), handle_size=8.0, line_margin=3.0,
+                 color=unreal.LinearColor(0.1, 0.1, 0.1, 0.8),
+                 on_changed=None, **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
+        """可拖动的两栏：将子控件加到 splitter.first / splitter.second 上。
+
+        vertical=False 为左右分栏，True 为上下分栏；first 在左或上。  
+        ratio 为 first 占两侧可用空间的比例，limits 限制比例范围。  
+        handle_size 为拖动热区宽度，line_margin 为细线两端留白（Slate 单位）。  
+        color 为细线颜色，默认灰色（LinearColor）。  
+        返回容器还提供 divider、get_ratio()、set_ratio(value)、solo(mode)。  
+        solo(1) 只显示 first，solo(2) 只显示 second；  
+        solo(0) 或其他值恢复双栏和分割条，不改变比例。  
+        不要直接向返回容器添加子控件，否则会形成额外栏位。  
+        on_changed(ratio) 接收比例变化；回调内不要调用 set_ratio()。
+        """
+        import math
+
+        low, high = map(float, limits)
+        ratio, handle_size, line_margin = float(ratio), float(handle_size), float(line_margin)
+        if not all(math.isfinite(v) for v in (low, high, ratio, handle_size, line_margin)):
+            raise ValueError('分割栏参数必须为有限数值')
+        if not 0 < low < high < 1 or handle_size <= 0:
+            raise ValueError('要求 0 < limits[0] < limits[1] < 1 且 handle_size > 0')
+        if line_margin < 0:
+            raise ValueError('line_margin 不能为负数')
+
+        horizontal = not vertical
+        kwargs.setdefault('align', (0, 0))
+        body = self.row(**kwargs) if horizontal else self.col(**kwargs)
+        state = {'ratio': max(low, min(ratio, high)), 'drag': False, 'offset': 0.0, 'solo': 0}
+        first = body.col(fill=state['ratio'], padding=0, align=(0, 0), clip=True)
+        gap = body.sizebox(width=handle_size if horizontal else None,
+                           height=None if horizontal else handle_size,
+                           padding=0, align=(0, 0))
+        second = body.col(fill=1-state['ratio'], padding=0, align=(0, 0), clip=True)
+
+        def axis(vector):
+            return vector.x if horizontal else vector.y
+
+        def set_ratio(value):
+            value = float(value)
+            if not math.isfinite(value):
+                raise ValueError('ratio 必须为有限数值')
+            value = max(low, min(value, high))
+            if abs(value-state['ratio']) < 1e-6:
+                return state['ratio']
+            state['ratio'] = value
+            first.target.slot.set_size(unreal.SlateChildSize(value, unreal.SlateSizeRule.FILL))
+            second.target.slot.set_size(unreal.SlateChildSize(1-value, unreal.SlateSizeRule.FILL))
+            if on_changed is not None:
+                on_changed(value)
+            return value
+
+        def down(w):
+            if state['solo']:
+                return False
+            state['drag'] = True
+            state['offset'] = axis(w.get_mouse_local())-handle_size/2
+            return unreal.WidgetLibrary.capture_mouse(unreal.WidgetLibrary.handled(), w.target)
+
+        def move(w):
+            if not state['drag']:
+                return False
+            if not w.target.has_mouse_capture():
+                state['drag'] = False
+                return False
+            available = axis(body.get_local_size())-handle_size
+            if available <= 0:
+                return False
+            position = axis(body.get_mouse_local())
+            set_ratio((position-handle_size/2-state['offset'])/available)
+            return True
+
+        def up(w):
+            if not state['drag'] and not w.target.has_mouse_capture():
+                return False
+            state['drag'] = False
+            return unreal.WidgetLibrary.release_mouse_capture(unreal.WidgetLibrary.handled())
+
+        handle = gap.border(color=unreal.LinearColor(0, 0, 0, 0),
+                            padding=0, align=(0, 0), on_mouse_button_down=down,
+                            on_mouse_move=move, on_mouse_button_up=up)
+        handle.set_cursor(unreal.MouseCursor.RESIZE_LEFT_RIGHT if horizontal
+                          else unreal.MouseCursor.RESIZE_UP_DOWN)
+        line_box = handle.sizebox(width=1 if horizontal else None,
+                                 height=None if horizontal else 1,
+                                 padding=(0, line_margin) if horizontal else (line_margin, 0),
+                                 align=(2, 0) if horizontal else (0, 2))
+        line = line_box.border(color=color, padding=0, align=(0, 0))
+        for node in (line_box, line):
+            node.hide(unreal.SlateVisibility.SELF_HIT_TEST_INVISIBLE)
+
+        def solo(mode=0):
+            """1 显示 first，2 显示 second，其他值恢复双栏。"""
+            mode = mode if mode in (1, 2) else 0
+            state['solo'] = mode
+            state['drag'] = False
+            state['offset'] = 0.0
+            first.hide(mode == 2)
+            second.hide(mode == 1)
+            gap.hide(mode != 0)
+            return body
+
+        body.first, body.second, body.divider = first, second, handle
+        body.get_ratio = lambda: state['ratio']
+        body.set_ratio = set_ratio
+        body.solo = solo
+        return body
+
+
     def spacer(self, size=unreal.Vector2D(1, 1),
                **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
         """添加空白占位"""
@@ -919,27 +1246,6 @@ class Layout():
         """添加页面切换器；animated=True 使用动画切换"""
         switcher_type = unreal.CommonAnimatedSwitcher if animated else unreal.WidgetSwitcher
         return Layout(add_widget(self.target, switcher_type, **kwargs), public=self._public_)
-
-
-    def scalebox(self, scale: float=None, padding=0,
-                 **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
-        """添加缩放容器，可指定scale为固定缩放比例。若要动态调整scale，需设置默认值"""
-        scalebox = add_widget(self.target, unreal.ScaleBox, padding=padding, **kwargs)
-        if scale is not None:
-            scalebox.set_editor_property('Stretch', unreal.Stretch.USER_SPECIFIED)
-            scalebox.set_editor_property('UserSpecifiedScale', float(scale))
-        return Layout(scalebox, public=self._public_)
-
-
-    def sizebox(self, width=None, height=None,
-                **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
-        """固定宽高的容器；省略的边不覆盖，之后仍可 set_width_override / set_height_override"""
-        box = add_widget(self.target, unreal.SizeBox, **kwargs)
-        if width is not None:
-            box.set_width_override(float(width))
-        if height is not None:
-            box.set_height_override(float(height))
-        return Layout(box, public=self._public_)
 
 
     def wrapbox(self, inner_padding=(0, 0),
@@ -979,6 +1285,9 @@ class Layout():
 
         def handled(func, *args):
             result = func(*args)
+            # UE Python may return (EventReply, output parameters).
+            if isinstance(result, tuple) and result and isinstance(result[0], unreal.EventReply):
+                result = result[0]
             if isinstance(result, unreal.EventReply):
                 return result
             return unreal.WidgetLibrary.handled() if result else unreal.WidgetLibrary.unhandled()
@@ -999,26 +1308,56 @@ class Layout():
         return border
 
 
-    def custom(self, widget, **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
+    def carousel(self, speed=3, on_changed: Callable[[unreal.CommonWidgetCarousel, int], Any]=None,
+                **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
+        """滚动显示屏。speed为滚动速度，由于引擎内容的bug，这个值只能在构建时设置。
+        可通过carousel.page(x)设置页面索引，自动限制在有效范围内；
+        通过index()获取当前索引, prev()/next()翻页
+        """
+        widget = Layout(add_widget(self.target, unreal.CommonWidgetCarousel,
+                        props={'move_speed': speed}, **kwargs), public=self._public_)
+
+        def page(index):
+            count = widget.get_children_count()
+            if count <= 0:
+                return 0
+            index = max(0, min(int(index), count - 1))
+            widget.set_active_widget_index(index)
+            return index
+
+        widget.page = page
+        widget.index = widget.get_active_widget_index
+        widget.prev = widget.next_page
+        widget.next = widget.previous_page
+        if on_changed:
+            widget.on_current_page_index_changed.add_callable(on_changed)
+
+        return widget
+
+
+    def custom(self, widget, props: dict=None, **kwargs: padding_align_fill_clip_tooltip_hidden_subclass):
         """添加自定义控件类型或实例"""
-        return Layout(add_widget(self.target, widget, **kwargs), public=self._public_)
+        return Layout(add_widget(self.target, widget, props, **kwargs), public=self._public_)
+
+
+def _run_ui_script(script, context=None):
+    """每次执行独立命名空间；回调保留本次变量，类的模块和默认保存路径不变。"""
+    code = compile(script, '<mineprep.ui>', 'exec') if isinstance(script, str) else script
+    import mineprep
+    namespace = globals().copy()
+    namespace['mineprep'] = mineprep
+    namespace['context'] = context
+    namespace['layout'] = mineprep.Layout(context.find_child_widget_by_name('Root')) if context is not None else mineprep.Layout()
+    exec(code, namespace)
 
 
 def ui(script='', save_path=None, run=True):
-    """创建一个新的自定义控件并运行, 可设置保存名称或路径，输入名称时会自动保存到/Game/mc/mods/"""
+    """创建自定义控件；每次运行的脚本变量独立。save_path 输入名称时保存到/Game/mc/mods/。"""
     if mcvars.DebugMode:
         unreal.log(script)
 
-    save_script = f"""
-layout = mineprep.Layout(context.find_child_widget_by_name('Root'))
-{script}
-"""
-    compile_script = f"""
-import mineprep
-layout = mineprep.Layout()
-{script}
-"""
-    compiled_code = compile(compile_script, '<mineprep.ui>', 'exec')
+    save_script = f"import mc_widget\nmc_widget._run_ui_script({script!r}, context)\n"
+    compiled_code = compile(script, '<mineprep.ui>', 'exec')
 
     if save_path:
         #是否是包含'/'的路径
@@ -1033,5 +1372,4 @@ layout = mineprep.Layout()
             subsystem.spawn_and_register_tab_with_id(widget, str(random.randint(0, 999999999)))
         return widget
     elif run:
-        exec(compiled_code, globals())
-
+        _run_ui_script(compiled_code)

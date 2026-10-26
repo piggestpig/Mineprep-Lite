@@ -1,4 +1,4 @@
-"""Selection sync for Skin Editor DetailsViews."""
+"""视口选中角色与材质面板的同步逻辑。"""
 import unreal
 import mineprep
 from . import util
@@ -86,12 +86,17 @@ def _sync_spin(mod, count):
 
 def apply_columns(mod):
     opts = getattr(mod, 'options', None)
-    left = getattr(mod, '_left', None)
-    right = getattr(mod, '_right', None)
-    if opts and _alive_layout(left):
-        left.hide(not opts.Body)
-    if opts and _alive_layout(right):
-        right.hide(not opts.Head)
+    split = getattr(mod, '_split', None)
+    if not opts or not _alive_layout(split):
+        return
+    body, head = bool(opts.Body), bool(opts.Head)
+    split.hide(not (body or head))
+    if body and head:
+        split.solo(0)
+    elif body:
+        split.solo(1)
+    elif head:
+        split.solo(2)
 
 
 def on_actor_index(mod, _value=None):
@@ -134,22 +139,3 @@ def refresh(mod, _selection_set=None, reset_index=True):
     _set_object(mod._head_view, head)
     _set_text(mod._body_title, actor.get_actor_label())
     _set_text(mod._head_title, head.get_name() if head else mineprep.bilingual('无头部', 'No Head'))
-
-
-def test_material_details():
-    cls = mineprep.uclass(util.MATERIAL_DETAILS)
-    parent_ok = bool(cls) and unreal.MathLibrary.class_is_child_of(cls, unreal.DetailsView)
-    selected = selected_actors()
-    actor = selected[0] if selected else None
-    skms = actor_skms(actor)
-    main = util.pick_main(skms, actor) if actor and skms else None
-    head = util.pick_head(skms, main) if actor and skms else None
-    print('CLASS', cls.get_name() if cls else 'NONE')
-    print('PARENT', int(parent_ok))
-    print('ACTOR', actor.get_actor_label() if actor else 'NONE')
-    print('SKMS', len(skms))
-    print('BODY', main.get_name() if main else 'NONE')
-    print('HEAD', head.get_name() if head else 'NONE')
-    print('SELECTED', len(selected))
-    print('MC', int(bool(main) and util.is_mc_comp(main)))
-    return cls, main, head

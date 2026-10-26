@@ -1,21 +1,18 @@
-"""
-Sequencer 关键帧工具 — 等效于细节面板菱形“添加关键帧”按钮。
+"""Sequencer 关键帧工具。
 
-支持：
-  - Transform（默认）：Location / Rotation / Scale 及单轴子通道
-  - 常见属性：bool, int, float, Vector, Vector2D, Rotator, LinearColor, str
-
-限制：
-  - 首版以 Possessable Actor/Component 为主；Spawnable 绑定可能需手动添加
-  - 子序列内使用 local 时间与绑定（与 Sequencer UI 一致）
-  - 暂不支持 enum/byte/object 引用等复杂类型
-"""
+支持 Transform 及其单轴通道，以及 bool、int、float、Vector、Vector2D、
+Rotator、LinearColor 和 str 属性。子序列使用本地时间和绑定。
+主要处理 Possessable Actor/Component；Spawnable 绑定可能需要手动添加。
+暂不支持 enum、byte 和对象引用属性。"""
 
 import fnmatch
 from collections.abc import Iterable
 from types import SimpleNamespace
 
-import unreal
+try:
+    import unreal
+except ModuleNotFoundError:
+    from mc_utils import Lazy as unreal
 from mc_utils import throw, uclass, world, undo
 
 _TIME_UNIT = unreal.MovieSceneTimeUnit.DISPLAY_RATE
@@ -113,6 +110,16 @@ def _binding_id(binding) -> unreal.MovieSceneObjectBindingID:
     binding_id = unreal.MovieSceneObjectBindingID()
     binding_id.set_editor_property('Guid', binding.get_id())
     return binding_id
+
+
+def bound_actor(binding):
+    """已打开序列里，该绑定对应的第一个 Actor。尚未解析时返回 None。"""
+    if not is_binding(binding):
+        return None
+    for obj in unreal.LevelSequenceEditorBlueprintLibrary.get_bound_objects(_binding_id(binding)):
+        if _is_actor(obj):
+            return obj
+    return None
 
 
 def _iter_bindings(sequence):
@@ -447,7 +454,7 @@ def _format_key_value(value) -> str:
 
 
 def _format_key_suffix(key) -> str:
-    """关帧后缀，格式 '@帧:值'"""
+    """生成关键帧后缀，格式为 '@帧:值'"""
     frame = key.get_time().frame_number.value
     try:
         value = key.get_value()
@@ -591,7 +598,7 @@ def _filter_channels(channels, name=None, ctx=None):
 
 
 def _filter_keys(keys, name=None, ctx=None):
-    """按完整路径或后缀通配过滤关帧"""
+    """按帧号、完整路径或后缀通配过滤关键帧"""
     keys = list(keys)
     if not name:
         return keys
@@ -990,8 +997,10 @@ def _resolve_value_kind(value):
     return None
 
 
-def _track_class_for_kind(kind):
+def _track_class_for_kind(kind, prop=''):
     """按 kind 返回对应 MovieScene*Track 类"""
+    if prop and prop.lower() in ('bhidden', 'visibility'):
+        return unreal.MovieSceneVisibilityTrack
     mapping = {
         'bool': unreal.MovieSceneBoolTrack,
         'int': unreal.MovieSceneIntegerTrack,
@@ -1007,7 +1016,7 @@ def _track_class_for_kind(kind):
 
 def _track_kind(track):
     """从属性轨道推断其值类型 kind"""
-    if isinstance(track, unreal.MovieSceneBoolTrack):
+    if isinstance(track, (unreal.MovieSceneBoolTrack, unreal.MovieSceneVisibilityTrack)):
         return 'bool'
     if isinstance(track, unreal.MovieSceneIntegerTrack):
         return 'int'
@@ -1037,6 +1046,9 @@ def _validate_property_keyframe(obj, binding, prop, value):
     if not prop:
         _log_skip('非 Transform 关键帧必须指定 prop')
         return None
+
+    if prop.lower() == 'visibility' and not _property_exists(obj, prop):
+        prop = 'bHidden'
 
     if not _property_exists(obj, prop):
         _log_skip(f'找不到属性 {prop!r}')
@@ -1090,6 +1102,10 @@ def _is_property_track(track) -> bool:
 def _find_property_track(binding, prop):
     """在绑定中查找匹配属性路径的轨道"""
     prop_name, prop_path = _prop_name_and_path(prop)
+    if prop_name.lower() in ('bhidden', 'visibility'):
+        vis_tracks = binding.find_tracks_by_exact_type(unreal.MovieSceneVisibilityTrack)
+        if vis_tracks:
+            return vis_tracks[0]
     for track in binding.get_tracks():
         if not _is_property_track(track):
             continue
@@ -1108,7 +1124,7 @@ def _get_or_create_property_section(binding, prop, kind):
     """获取或创建属性轨道及其 section"""
     track = _find_property_track(binding, prop)
     if not track:
-        track_class = _track_class_for_kind(kind)
+        track_class = _track_class_for_kind(kind, prop)
         if not track_class:
             _log_skip(f'无法为属性种类 {kind!r} 创建轨道')
             return None
@@ -1158,7 +1174,7 @@ def _channel_values_for_property(value, kind):
 
 
 def _key_property_channels(section, frame, value, kind) -> bool:
-    """对属性 section 各通道打关帧"""
+    """对属性片段的各通道打关键帧"""
     values = _channel_values_for_property(value, kind)
     if not values:
         _log_skip(f'内部错误: 未知属性种类 {kind!r}')
@@ -1295,7 +1311,7 @@ def _rig_io(ctype):
 
 
 def _find_sequencer_control_rig(sequence, track, cls, skm, skm_binding):
-    """按 SKM 轨道取 Control Rig。同一 Actor 可有多套 FK，不能用 hosting actor。"""
+    """查找绑定在指定骨骼网格体轨道上的 Control Rig 实例（同一 Actor 可有多个骨骼网格体，因此按组件绑定匹配）。"""
     lib = unreal.ControlRigSequencerLibrary
     skm_id = skm_binding.get_id() if skm_binding else None
     bound_match = None
@@ -1418,7 +1434,8 @@ class Rig:
         setter(self.sequence, self.target, full_name, frame, value, _TIME_UNIT, set_key)
         return value
 
-        """读取控件值；time=None 为播放头（int 帧 / float 秒）"""
+    def get(self, name, time=None):
+        """读取控件值；time=None 为播放头（int 帧 / float 秒），不修改姿态或关键帧。"""
         full = self._resolve_name(name)
         return self._read(full, self._frame(time))
 

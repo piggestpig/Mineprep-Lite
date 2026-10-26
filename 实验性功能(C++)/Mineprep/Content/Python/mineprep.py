@@ -1,4 +1,7 @@
-import unreal
+try:
+    import unreal
+except ModuleNotFoundError:
+    from mc_utils import Lazy as unreal
 import os
 import re
 import json
@@ -9,26 +12,35 @@ from pathlib import Path
 from typing import Any
 
 import mc_importer, mc_utils, mc_prep, mc_localization, mc_structure, mc_config
-import mc_sequencer, mc_widget, mc_mod, mc_mesh, mc_material, mc_parallel
+import mc_sequencer, mc_widget, mc_mod, mc_mesh, mc_material, mc_parallel, mc_bplib, mc_math
 import mc_sequencer as mcseq
+from mc_bplib import BPLibCaller, BPLib, EditorBPLib
 from mc_importer import import_block, import_item, resolve_block_json_path, get_all_blocks
 from mc_utils import (reload, cast, uclass, bpclass, world, prints, warn, throw, panic,
                       enum, askopenfilename, send2trash, set_actor_label, select_actors,
-                      lazy_import, undo, get_hotkey_object, construct, uasset, copy,
+                      undo, open_main_panel, get_hotkey_object, construct, uasset, copy,
                       List, SafeList, WrapList, iscollection, debug, resolve_soft, dialog,
-                      askdirectory, asksaveasfilename, startfile, screenshot)
+                      askdirectory, asksaveasfilename, startfile, screenshot, Lazy,
+                      left_mouse_down, middle_mouse_down, right_mouse_down)
 from mc_parallel import (
-    delay, tick, asynctask, thread, asyncthread,
+    delay, tick, asynctask, thread, asyncthread, until,
     DelayRunner, TickRunner, AsyncTaskRunner, ThreadRunner,
 )
 from mc_prep import prep_texture, load_mcprep_data, colorize_material
-from mc_material import tex_to_color, color_to_tex, ColorList
+from mc_material import (
+    tex_to_color, color_to_tex, ColorList,
+    register_biome_tex, clear_biome_tex,
+    tex_source_files, export_tex_cache, import_data_tex,
+)
 from mc_localization import (localize, loctext, nsloctext, loctable_col, bilingual, tooltip)
 from mc_structure import (
     parse_structure, structure_to_tex, structure_parts, Blocks,
-    convert_to_unreal_transforms, convert_to_packed_arrays,
+    convert_to_unreal_transforms, convert_to_packed_arrays, add_packed_instances,
+    spawn_structure,
 )
 import mcvars
+from mc_math import boxes_to_packed, encode_rotation, decode_rotation
+from mc_blockstates import rotate_state, mirror_state
 from mc_config import config, paths, wclass
 from mc_sequencer import keyframe, Rig
 from mc_widget import Layout, PropertyGroup, add_widget, ui, make_combo_text
@@ -76,6 +88,16 @@ class MineprepAPIHandle:
             target = WrapList(target) if iscollection(target) else WrapList()
         self.target = target
         self.label = label
+
+    def __len__(self):
+        """返回集合句柄的元素数量；单对象句柄不支持长度。"""
+        if not self._collection:
+            raise TypeError(f'{type(self).__name__} is not a collection handle')
+        return len(self.target)
+
+    def __bool__(self):
+        """集合非空或单对象 target 不为 None 时为真。"""
+        return len(self.target) > 0 if self._collection else self.target is not None
 
     def __str__(self):
         return pformat(self.label)
@@ -330,24 +352,51 @@ class toolbar(MineprepAddonHandle):
 
 class hotkey(MineprepAddonHandle):
     def __init__(self, name = ''):
-        """调用自定义快捷键蓝图中的同名函数"""
-        target = get_hotkey_object().call_method(str(name))
-        super().__init__(target, name)
+        """执行自定义快捷键。不带名称时打印全部快捷键；有名称时优先运行保存的代码，代码为空时调用蓝图同名函数。"""
+        from mods.EditorShortcuts.ops import execute_shortcut, get_shortcuts
+        if not name:
+            lines = [str(tooltip('所有快捷键'))]
+            for shortcut_name, item in get_shortcuts().items():
+                lines.append(shortcut_name)
+                lines.append(f"  {bilingual('按键', 'Chord')}: {self._chord_label(item.get('chord_text', ''))}")
+                lines.append(f"  {bilingual('提示', 'Tooltip')}: {item.get('tooltip', '')}")
+                lines.append('')
+            prints('\n'.join(lines), duration=8)
+            return
+        execute_shortcut(str(name))
+        super().__init__(None, name)
+
+    @staticmethod
+    def _chord_label(chord_text: str) -> str:
+        if not chord_text:
+            return ''
+        chord = unreal.InputChord()
+        if not chord.import_text(chord_text):
+            return chord_text
+        return str(unreal.InputLibrary.input_chord_get_display_name(chord))
 
 ###########################################################################
 
 class MineprepWorldHandle(MineprepAPIHandle):
+    _element = None
+
+    def __new__(cls, *args, **kwargs):
+        """集合句柄用单个 int/float 调用时，返回该下标元素的单个包装器。"""
+        if (cls._element is not None and len(args) == 1 and not kwargs
+                and isinstance(args[0], (int, float)) and not isinstance(args[0], bool)):
+            return cls._element(cls()[args[0]])
+        return super().__new__(cls)
+
     @classmethod
     def _indexed(cls, key):
-        """int/bool 列表视为对 cls() 的花式下标；否则 None。"""
+        """若传入整数或布尔列表，则作为花式索引从默认集合中取值；否则返回 None。"""
         if List._take(key) is None:
             return None
         return list(cls()[key])
 
-    @undo
     def __class_getitem__(cls, key):
-        """类下标：int/slice/numpy 多轴/花式下标取集合元素；其它参数走构造查找"""
-        if isinstance(key, (int, slice)):
+        """类下标访问：传入索引、切片或掩码时从集合中取值；传入名称、类型等参数时查找并返回底层 UObject。"""
+        if isinstance(key, (int, slice)) or (cls._collection and isinstance(key, float)):
             return cls()[key]
         if isinstance(key, tuple) and len(key) == 2:
             return cls()[key]
@@ -356,7 +405,7 @@ class MineprepWorldHandle(MineprepAPIHandle):
         return cls(key).target
 
     def __getitem__(self, key):
-        """实例下标：集合支持 int/slice/numpy 多轴；非集合返回自身 target"""
+        """实例下标访问：集合句柄支持索引、切片与掩码筛选；单对象句柄直接返回 target。"""
         if not self._collection:
             return self.target
         return self.target[key]
@@ -437,6 +486,7 @@ class actor(MineprepWorldHandle):
 
 class actors(MineprepWorldHandle):
     _collection = True
+    _element = actor
 
     def __init__(self, name=unreal.Actor):
         """按标签/类型/回调查找多个 Actor，支持批量组件与材质操作"""
@@ -483,6 +533,26 @@ class actors(MineprepWorldHandle):
         self.mats = MaterialsHandle
 
 
+class selected(actors):
+    """按标签/类型/回调查选中的Actors。整数或小数索引返回对应的 actor。"""
+
+    def __new__(cls, name=unreal.Actor):
+        if isinstance(name, (int, float)) and not isinstance(name, bool):
+            return super().__new__(cls, name)
+        subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+        picked = list(subsystem.get_selected_level_actors())
+        if isinstance(name, type):
+            if name is not unreal.Actor:
+                picked = [a for a in picked if isinstance(a, name)]
+        elif isinstance(name, str):
+            pattern = name if '*' in name else f'*{name}*'
+            picked = list(unreal.EditorFilterLibrary.by_actor_label(
+                picked, pattern, unreal.EditorScriptingStringMatchType.MATCHES_WILDCARD))
+        elif callable(name):
+            picked = [a for a in picked if name(a)]
+        return actors(picked)
+
+
 class component(MineprepWorldHandle):
     def __init__(self, target=None):
         super().__init__(target, target.get_name() if target else '')
@@ -527,6 +597,7 @@ class component(MineprepWorldHandle):
 
 class components(MineprepWorldHandle):
     _collection = True
+    _element = component
 
     def __init__(self, target=None):
         indexed = type(self)._indexed(target)
@@ -668,10 +739,6 @@ class materials(MineprepWorldHandle):
 ###########################################################################
 
 class MineprepSequencerHandle(MineprepWorldHandle):
-    def key():
-        """⚠暂不支持"""
-        return None
-
     @staticmethod
     def frame() -> int:
         """获取当前播放头所在帧数"""
@@ -738,6 +805,13 @@ class bindings(MineprepSequencerHandle):
     def find(parent, name=None):
         """从序列中收集绑定，可按显示名过滤"""
         return mcseq.gather_bindings(parent, name)
+
+    def actor(self):
+        """唯一绑定时返回它在关卡里的 Actor。没有、多个或尚未解析时返回 None。序列需已打开。"""
+        items = [b for b in self.target if mcseq.is_binding(b)]
+        if len(items) != 1:
+            return None
+        return mcseq.bound_actor(items[0])
 
 
 class tracks(MineprepSequencerHandle):
@@ -969,86 +1043,3 @@ def spawn_blocks(mesh=None, transforms=[unreal.Transform()], loc=(0,0,0), rot=(0
     ism.add_instances(transforms, False, False, True)
     return actor
 
-
-def spawn_structure(source='', loc=(0,0,0), rot=(0,0,0), gpu=0, cull=0, merge=0,
-                    reload=False, name='', center=None) -> list[unreal.Actor]:
-    """生成MC结构。source 是文件路径或 Blocks；gpu=1 是 PCG，gpu=2 是粒子；
-    cull=1按类型剔除内部实心, cull=2全体实心统一剔除内部, cull=3=2+剔除AABB侧面与底面；
-    merge=0关, 1长条, 2平面, 3长方体（仅完整正方体；cull 优先于 merge）
-    """
-    if isinstance(source, Blocks):
-        filename = name or source.name or 'structure'
-        use_center = False if center is None else bool(center)
-        cells = source.copy_cells()
-    else:
-        if not source:
-            warn('spawn_structure 需要文件路径或 Blocks')
-            return []
-        loaded = Blocks.from_file(source)
-        if not loaded:
-            return []
-        filename = name or loaded.name or Path(str(source)).stem
-        use_center = True if center is None else bool(center)
-        cells = loaded.copy_cells()
-
-    cells = mc_structure._apply_cull(cells, cull)
-    packed = bool(gpu)
-    if packed:
-        payload_map = convert_to_packed_arrays(cells, center=use_center, merge=merge)
-    else:
-        payload_map = convert_to_unreal_transforms(cells, center=use_center, merge=merge)
-
-    inventory = loctable_col(6,2)
-    actors = []
-    meshes = []
-    spawn_jobs = []
-
-    for model_name, payload in payload_map.items():
-        path = resolve_block_json_path(model_name)
-        mesh = None
-        if path is not None:
-            mesh = import_block(path, asset_name=model_name, reload=reload)
-        else:
-            candidate = next((n for n in inventory if n.startswith(model_name)), None)
-            path = resolve_block_json_path(candidate) if candidate else None
-            if path is not None:
-                mesh = import_block(path, asset_name=model_name, reload=reload)
-            else:
-                warn(f'未找到{model_name}模型')
-
-        meshes.append(mesh)
-        if mesh is not None and not gpu:
-            spawn_jobs.append((model_name, mesh, payload))
-
-    if not gpu:
-        for model_name, mesh, transforms in spawn_jobs:
-            actor = spawn_blocks(mesh, transforms, loc, rot)
-            actor.set_folder_path(filename)
-            actors.append(actor)
-            set_actor_label(actor, f'{filename}_{model_name}')
-
-    if gpu == 1:
-        BPT_Tex, BRT_Tex, mapping_data = structure_to_tex(payload_map, filename)
-        loaded_class = uclass('/Game/Mineprep/MC_Blueprint/PCG/PCG实例化方块.PCG实例化方块')
-        actor = unreal.EditorLevelLibrary.spawn_actor_from_class(loaded_class, loc, rot)
-        actor.set_folder_path('Structures')
-        actors.append(actor)
-        set_actor_label(actor, f'{filename}')
-        mesh_paths = [unreal.SystemLibrary.get_soft_object_path(mesh) for mesh in meshes]
-        actor.set_editor_property('Blocks', mesh_paths)
-        actor.set_editor_property('PosTex', BPT_Tex)
-        actor.set_editor_property('RotTex', BRT_Tex)
-
-    elif gpu == 2:
-        BPT_Tex, BRT_Tex, mapping_data = structure_to_tex(payload_map, filename)
-        loaded_class = uclass('/Game/Mineprep/MC_Blueprint/Niagara/动态地形粒子/动态结构粒子.动态结构粒子')
-        actor = unreal.EditorLevelLibrary.spawn_actor_from_class(loaded_class, loc, rot)
-        actor.set_folder_path('Structures')
-        actors.append(actor)
-        set_actor_label(actor, f'{filename}')
-        actor.set_editor_property('方块', meshes)
-        actor.root_component.set_variable_texture('方块位置纹理', BPT_Tex)
-        actor.root_component.set_variable_texture('方块旋转纹理', BRT_Tex)
-
-    select_actors(actors)
-    return actors

@@ -1,11 +1,7 @@
-"""Skeletal-mesh component helpers for Skin Editor."""
+"""角色骨骼网格体组件筛选与辅助函数。"""
 import pathlib
 import unreal
 import mineprep
-
-
-MATERIAL_DETAILS = (
-    '/Mineprep/Python/mods/Skin_Editor/MaterialDetailsView.MaterialDetailsView')
 
 
 def _alive(obj):

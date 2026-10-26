@@ -1,45 +1,134 @@
-import unreal
 import os
 import re
 import math
+import platform
 import subprocess
 import sys
 import traceback
 import builtins
+import ctypes
 import mcvars
 from dataclasses import dataclass, asdict
 from pprint import pformat
 from functools import lru_cache, wraps
+from weakref import finalize
 from typing import Iterable
 import operator
 
 HotkeyObjCache = None
 
-libs = {
-    'np': 'numpy',
-    'numpy': 'numpy',
-    'cv2': 'cv2',
-    'plt': 'matplotlib.pyplot',
-}
+class LazyMeta(type):
+    # 任意不存在的属性
+    def __getattr__(cls, name):
+        return cls
 
-def lazy_import(func):
-    """函数装饰器，自动扫描函数内部引用的全局名称，并导入libs中匹配的库"""
-    referenced_names = func.__code__.co_names
-    # 筛选出匹配我们映射表的库
-    detected_dependencies = {name: libs[name] for name in referenced_names if name in libs}
+    # 下标访问
+    def __getitem__(cls, key):
+        return cls
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # 3. 在函数被实际调用时，才执行以下逻辑（延迟加载）
-        for alias, real_lib_name in detected_dependencies.items():
-            # 如果这个库还没有被导入过
-            if alias not in func.__globals__:
-                # 动态导入库，fromlist=['*'] 是为了兼容 matplotlib.pyplot 这种带点的子模块
-                module = __import__(real_lib_name, fromlist=['*'] if '.' in real_lib_name else [])
-                # 把导入的模块以别名（如 np）的形式，直接注入到该函数的全局命名空间中！
-                func.__globals__[alias] = module
-        return func(*args, **kwargs)
-    return wrapper
+    def __setitem__(cls, key, value):
+        pass
+
+    def __delitem__(cls, key):
+        pass
+
+    # 函数调用（不创建实例）
+    def __call__(cls, *args, **kwargs):
+        return cls
+
+    # 通用操作
+    def _self(cls, *args, **kwargs):
+        return cls
+
+    # 算术运算
+    __add__ = __radd__ = __iadd__ = _self
+    __sub__ = __rsub__ = __isub__ = _self
+    __mul__ = __rmul__ = __imul__ = _self
+    __truediv__ = __rtruediv__ = __itruediv__ = _self
+    __floordiv__ = __rfloordiv__ = __ifloordiv__ = _self
+    __mod__ = __rmod__ = __imod__ = _self
+    __pow__ = __rpow__ = __ipow__ = _self
+    __matmul__ = __rmatmul__ = __imatmul__ = _self
+
+    # 位运算
+    __and__ = __rand__ = __iand__ = _self
+    __or__ = __ror__ = __ior__ = _self
+    __xor__ = __rxor__ = __ixor__ = _self
+    __lshift__ = __rlshift__ = __ilshift__ = _self
+    __rshift__ = __rrshift__ = __irshift__ = _self
+
+    # 一元运算
+    __neg__ = __pos__ = __abs__ = __invert__ = _self
+
+    # 比较运算
+    def __lt__(cls, other):
+        return False
+
+    __le__ = __gt__ = __ge__ = __lt__
+
+    def __eq__(cls, other):
+        return cls is other
+
+    def __ne__(cls, other):
+        return cls is not other
+
+    __hash__ = type.__hash__
+
+    # 布尔值
+    def __bool__(cls):
+        return False
+
+    # 数值转换
+    def __int__(cls):
+        return 0
+
+    def __float__(cls):
+        return 0.0
+
+    def __complex__(cls):
+        return 0j
+
+    def __index__(cls):
+        return 0
+
+    __trunc__ = __index__
+
+    def __round__(cls, ndigits=None):
+        return 0
+
+    def __divmod__(cls, other):
+        return cls, cls
+
+    __rdivmod__ = __divmod__
+
+    def __format__(cls, spec):
+        return str(cls)
+
+    # 长度
+    def __len__(cls):
+        return 0
+
+    # 迭代
+    def __iter__(cls):
+        return iter(())
+
+    # 成员判断
+    def __contains__(cls, item):
+        return False
+
+    __enter__ = _self
+
+    def __exit__(cls, exc_type, exc_value, traceback):
+        return False
+
+
+class Lazy(metaclass=LazyMeta):
+    """通用占位符，允许各种调用不报错，例如在离线测试时顶替unreal模块。调用属于未定义行为"""
+
+try:
+    import unreal
+except ModuleNotFoundError:
+    unreal = Lazy
 
 
 def iscollection(obj):
@@ -291,11 +380,7 @@ def undo(arg: str=None):
 
 
 def _adopt_module(dst, src):
-    """把 src 的命名空间拷进 dst，保持 dst 对象身份。
-
-    控制台里的 `mineprep` 仍是旧模块对象；只换 sys.modules 条目的话，
-    `mineprep.reload()` 之后 `mineprep.screenshot` 仍会找不到。
-    """
+    """用新模块的内容更新旧模块对象，使控制台等处已有的引用继续有效。"""
     dst_dict = dst.__dict__
     src_dict = src.__dict__
     keep = ('__name__', '__doc__', '__package__', '__loader__', '__spec__')
@@ -331,17 +416,11 @@ def _rebind_mineprep(from_mod, to_mod) -> int:
 
 
 def reload(*args):
-    """重新加载 mineprep 及其子模块；传入特定模块时，只重新加载这些模块。
-
-    全量重载流程：
-      1. 注销 ReloadWithMineprep 的 mod
-      2. 从 sys.modules 卸载 mineprep / mc_*（保留 mcvars）/ 相关 mods
-      3. 全新 import mineprep（避免 importlib.reload 造成 Layout/PropertyGroup 多份类对象）
-      4. 把新模块的命名空间写回旧模块对象（控制台无需 mineprep = mineprep.reload()）
-      5. 再 import 并 register 先前启用的 mod
-
-    返回同一个 mineprep 模块对象（原地更新）。控制台直接 `mineprep.reload()` 即可。
-    """
+    """重新加载 Mineprep 及其子模块；传入模块时，只重载指定模块。
+    
+    完整重载会先注销支持 ReloadWithMineprep 的模组，重新导入后再注册。
+    mcvars 保留。mineprep 模块对象原地更新，控制台无需重新赋值。
+    重新导入可避免 Layout、PropertyGroup 等类沿用旧定义。"""
     import importlib
     import sys
 
@@ -359,12 +438,14 @@ def reload(*args):
     enabled_names = {
         mod.__name__
         for mod in reloadable
-        if (getattr(mod, 'mod_info', None) or {}).get('EnabledByDefault')
+        if mod.__name__ in mcvars.EnabledMods
     }
     reloadable_names = [mod.__name__ for mod in reloadable]
 
     for mod in reversed(reloadable):
-        mc_mod.unregister_mod(mod)
+        if not mc_mod.unregister_mod(mod):
+            mcvars.ModsInitialized = True
+            raise RuntimeError(f'注销失败，停止重载: {mod.__name__}')
 
     import mineprep as old_mineprep
     import mc_widget
@@ -408,12 +489,9 @@ def reload(*args):
     for mod_name in reloadable_names:
         try:
             mod = importlib.import_module(mod_name)
+            mc_mod._sync_mod_info(mod)
             if mod_name in enabled_names:
-                info = getattr(mod, 'mod_info', None)
-                if info is None:
-                    mod.mod_info = info = {}
-                info['EnabledByDefault'] = True
-            mc_mod.register_mod(mod)
+                mc_mod.register_mod(mod)
             unreal.log(f'重新加载 {mod_name}')
         except Exception as e:
             warn(f'重新加载 {mod_name} 时出错: {e}')
@@ -491,17 +569,27 @@ def dialog(title, message=''):
     return result == unreal.AppReturnType.YES
 
 
-def debug(*args):
+
+def debug(*args, autolog=False, warning=False, error=False):
     """启用DebugMode时在日志中打印信息"""
     if mcvars.DebugMode:
+        text = '\n'.join(str(arg) if isinstance(arg, (str, unreal.Text)) else pformat(arg, sort_dicts=False) for arg in args)
+        if error:
+            throw(text)
+        elif warning:
+            warn(text)
+        else:
+            unreal.log(text)
+    elif autolog:
         text = '\n'.join(str(arg) if isinstance(arg, (str, unreal.Text)) else pformat(arg, sort_dicts=False) for arg in args)
         unreal.log(text)
 
 
-def screenshot(size: tuple[int, int]=None, path: str='', pos: unreal.Vector=None, lookat: unreal.Vector=None):
+def screenshot(size: tuple[int, int]=None, path: str='', pos: unreal.Vector=None, lookat: unreal.Vector=None, delay: float=0):
     """在编辑器中截取高分辨率截图，size默认是视口分辨率，
     path默认在项目/Saved/Screenshots下，会自动生成后缀名；指定path则覆写图片
     使用pos和lookat调整摄像机坐标与朝向
+    delay为截图前等待的秒数，默认0
     """
     size = 0 if size is None else size
     size = (size, size) if isinstance(size, (int, float)) else size
@@ -513,7 +601,7 @@ def screenshot(size: tuple[int, int]=None, path: str='', pos: unreal.Vector=None
         rot = unreal.MathLibrary.find_look_at_rotation(pos, lookat) if lookat else current_rot
         subsystem.set_level_viewport_camera_info(pos, rot)
 
-    unreal.AutomationLibrary.take_high_res_screenshot(size[0], size[1], path)
+    unreal.AutomationLibrary.take_high_res_screenshot(size[0], size[1], path, delay=delay)
 
 
 def uasset(input):
@@ -588,6 +676,19 @@ def resolve_soft(path: str | unreal.SoftObjectPath):
     return unreal.find_object(None, path) or unreal.load_object(None, path)
 
 
+def open_main_panel():
+    """打开 Mineprep 主面板。已经在标签页中时直接返回现有控件。"""
+    blueprint = uasset('/Game/Mineprep/Mineprep')
+    if not blueprint:
+        warn('未找到插件面板 /Game/Mineprep/Mineprep')
+        return None
+
+    subsystem = unreal.get_editor_subsystem(unreal.EditorUtilitySubsystem)
+    if widget := subsystem.find_utility_widget_from_blueprint(blueprint):
+        return widget
+    return subsystem.spawn_and_register_tab(blueprint)
+
+
 def get_hotkey_object(reload=False):
     """获取自定义快捷键对象"""
     global HotkeyObjCache
@@ -606,6 +707,89 @@ def get_hotkey_object(reload=False):
 def construct(cls, outer=None):
     """构造对象实例（调用蓝图的Construct方法，垃圾回收更安全）"""
     return get_hotkey_object().call_method('Construct', (bpclass(cls), outer))
+
+
+@lru_cache(maxsize=1)
+def _mouse_button_query():
+    """Bind once; Linux falls back from the editor's SDL3 to X11."""
+    backends = {'win32': ('windows',), 'darwin': ('mac',), 'linux': ('sdl', 'x11')}
+    for backend in backends.get(sys.platform, ()):
+        try:
+            if backend == 'windows':
+                read = ctypes.WinDLL('user32', use_last_error=True).GetAsyncKeyState
+                read.argtypes = (ctypes.c_int,)
+                read.restype = ctypes.c_short
+                return lambda index: read((0x01, 0x04, 0x02)[index]) & 0x8000
+            if backend == 'mac':
+                read = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics').CGEventSourceButtonState
+                read.argtypes = (ctypes.c_int32, ctypes.c_uint32)
+                read.restype = ctypes.c_bool
+                return lambda index: read(0, (0, 2, 1)[index])
+            if backend == 'sdl':
+                read = ctypes.CDLL(None).SDL_GetGlobalMouseState
+                read.argtypes = (ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float))
+                read.restype = ctypes.c_uint32
+                return lambda index: read(None, None) & (1 << index)
+
+            library = ctypes.CDLL('libX11.so.6')
+            library.XInitThreads.argtypes = ()
+            library.XInitThreads.restype = ctypes.c_int
+            library.XOpenDisplay.argtypes = (ctypes.c_char_p,)
+            library.XOpenDisplay.restype = ctypes.c_void_p
+            library.XDefaultRootWindow.argtypes = (ctypes.c_void_p,)
+            library.XDefaultRootWindow.restype = ctypes.c_ulong
+            library.XCloseDisplay.argtypes = (ctypes.c_void_p,)
+            library.XCloseDisplay.restype = ctypes.c_int
+            read = library.XQueryPointer
+            read.argtypes = (ctypes.c_void_p, ctypes.c_ulong,
+                            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+                            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+                            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+                            ctypes.POINTER(ctypes.c_uint))
+            read.restype = ctypes.c_int
+            library.XInitThreads()
+            display = library.XOpenDisplay(None)
+            if not display:
+                continue
+            root = library.XDefaultRootWindow(display)
+
+            def query(index):
+                parent, child = ctypes.c_ulong(), ctypes.c_ulong()
+                rx, ry, x, y = (ctypes.c_int() for _ in range(4))
+                mask = ctypes.c_uint()
+                if not read(display, root, ctypes.byref(parent), ctypes.byref(child),
+                            ctypes.byref(rx), ctypes.byref(ry), ctypes.byref(x), ctypes.byref(y), ctypes.byref(mask)):
+                    raise OSError('XQueryPointer failed')
+                return mask.value & (1 << (8 + index))
+
+            finalize(query, library.XCloseDisplay, display)
+            return query
+        except Exception:
+            continue
+    return None
+
+
+def _mouse_button_down(index):
+    query = _mouse_button_query()
+    try:
+        return None if query is None else bool(query(index))
+    except Exception:
+        return None
+
+
+def left_mouse_down():
+    """当前左键是否按下；无法查询时返回 None。UI 回调在主线程调用。"""
+    return _mouse_button_down(0)
+
+
+def middle_mouse_down():
+    """当前中键是否按下；无法查询时返回 None。UI 回调在主线程调用。"""
+    return _mouse_button_down(1)
+
+
+def right_mouse_down():
+    """当前右键是否按下；无法查询时返回 None。UI 回调在主线程调用。"""
+    return _mouse_button_down(2)
 
 
 def get_tex_size(tex: unreal.Texture2D) -> tuple[int, int]:
